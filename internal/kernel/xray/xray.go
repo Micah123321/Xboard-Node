@@ -101,6 +101,10 @@ func (x *Xray) Protocols() []string {
 //	Phase 4 – Start:   instance.Start             (no lock, potentially slow)
 //	Phase 5 – Commit:  store new state            (brief kernel lock)
 func (x *Xray) Start(nodeConfig *panel.NodeConfig, users []panel.User, certFile, keyFile string) error {
+	if err := kernel.ValidateShadowsocks2022Credentials(nodeConfig, users); err != nil {
+		return err
+	}
+
 	// ── Phase 1: Build config (no shared state) ─────────────────────────
 	x.ensureGeoData(nodeConfig)
 
@@ -277,6 +281,11 @@ func (x *Xray) AddUsers(users []panel.User) (int, error) {
 		merged = append(merged, u)
 	}
 
+	if err := kernel.ValidateShadowsocks2022Credentials(x.nodeConfig, merged); err != nil {
+		x.mu.Unlock()
+		return 0, err
+	}
+
 	if len(toAdd) == 0 {
 		// No new kernel users, but properties (limits) may have changed.
 		x.users = merged
@@ -401,6 +410,11 @@ func (x *Xray) UpdateUsers(users []panel.User) (added, removed int, err error) {
 	}
 	toAdd, toRemove := kernel.UserDiff(x.users, users)
 	added, removed = len(toAdd), len(toRemove)
+
+	if err = kernel.ValidateShadowsocks2022Credentials(x.nodeConfig, users); err != nil {
+		x.mu.Unlock()
+		return 0, 0, err
+	}
 
 	if added == 0 && removed == 0 {
 		// Only limits changed — update dispatcher without restart.

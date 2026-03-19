@@ -75,6 +75,10 @@ func (s *SingBox) Protocols() []string {
 }
 
 func (s *SingBox) Start(nodeConfig *panel.NodeConfig, users []panel.User, certFile, keyFile string) error {
+	if err := kernel.ValidateShadowsocks2022Credentials(nodeConfig, users); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -138,6 +142,10 @@ func (s *SingBox) Start(nodeConfig *panel.NodeConfig, users []panel.User, certFi
 // Routes, outbounds, and the connTracker stay alive so in-flight connections
 // continue to be tracked correctly.
 func (s *SingBox) Reload(nodeConfig *panel.NodeConfig, users []panel.User, certFile, keyFile string) error {
+	if err := kernel.ValidateShadowsocks2022Credentials(nodeConfig, users); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -437,6 +445,10 @@ func (s *SingBox) UpdateUsers(users []panel.User) (added, removed int, err error
 // reloadInboundsLocked hot-swaps inbound users using UpdatableInbound.
 // Must be called with s.mu held.
 func (s *SingBox) reloadInboundsLocked(users []panel.User) error {
+	if err := kernel.ValidateShadowsocks2022Credentials(s.nodeConfig, users); err != nil {
+		return err
+	}
+
 	cfgMap := buildConfig(s.cfg, s.nodeConfig, users, s.certFile, s.keyFile)
 	data, err := json.Marshal(cfgMap)
 	if err != nil {

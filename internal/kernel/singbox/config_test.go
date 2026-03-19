@@ -39,11 +39,11 @@ func TestBuildInbound_Shadowsocks2022(t *testing.T) {
 		Protocol:   "shadowsocks",
 		ServerPort: 222,
 		Cipher:     "2022-blake3-aes-128-gcm",
-		ServerKey:  "base64serverkey==",
+		ServerKey:  "MDEyMzQ1Njc4OWFiY2RlZg==",
 	}
 	inbound := buildInbound(nc, testUsers, "", "")
 	assertMapValue(t, inbound, "method", "2022-blake3-aes-128-gcm")
-	assertMapValue(t, inbound, "password", "base64serverkey==")
+	assertMapValue(t, inbound, "password", "MDEyMzQ1Njc4OWFiY2RlZg==")
 }
 
 // --- VMess ---

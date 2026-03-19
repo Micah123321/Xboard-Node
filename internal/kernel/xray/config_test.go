@@ -128,7 +128,7 @@ func TestBuildConfig_AllProtocols_ValidJSON(t *testing.T) {
 				Protocol:   "shadowsocks",
 				ServerPort: 8388,
 				Cipher:     "2022-blake3-aes-128-gcm",
-				ServerKey:  "test-server-key",
+				ServerKey:  "MDEyMzQ1Njc4OWFiY2RlZg==",
 			},
 		},
 		{
@@ -391,7 +391,7 @@ func TestBuildConfig_Shadowsocks_MultiUser(t *testing.T) {
 		Protocol:   "shadowsocks",
 		ServerPort: 8388,
 		Cipher:     "2022-blake3-aes-128-gcm",
-		ServerKey:  "server-key",
+		ServerKey:  "MDEyMzQ1Njc4OWFiY2RlZg==",
 	}
 	cfg := buildConfig(testKernelCfg, &nc, testUsers, "", "")
 	data, _ := json.Marshal(cfg)
@@ -403,7 +403,7 @@ func TestBuildConfig_Shadowsocks_MultiUser(t *testing.T) {
 	ib := inbounds[0].(map[string]interface{})
 	settings := ib["settings"].(map[string]interface{})
 
-	if settings["password"] != "server-key" {
+	if settings["password"] != "MDEyMzQ1Njc4OWFiY2RlZg==" {
 		t.Errorf("expected server key, got %v", settings["password"])
 	}
 	clients := settings["clients"].([]interface{})
@@ -427,7 +427,7 @@ func TestBuildConfig_SocksStats(t *testing.T) {
 	ib := inbounds[0].(map[string]interface{})
 	settings := ib["settings"].(map[string]interface{})
 	accounts := settings["accounts"].([]interface{})
-	
+
 	if len(accounts) == 0 {
 		t.Fatal("no accounts in socks config")
 	}
