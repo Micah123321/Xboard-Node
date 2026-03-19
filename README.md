@@ -14,7 +14,7 @@ Xboard 的专用节点后端，完整兼容 Xboard API，支持 sing-box 与 Xra
 
 ## 推荐部署方式：本机直接部署
 
-如果你希望避免 Docker 带来的额外内存占用，推荐直接使用仓库自带的 `install.sh` 原生部署脚本。脚本默认采用二进制 + `systemd` 的方式运行，不加 `--docker` 就是本机部署。
+如果你希望避免 Docker 带来的额外内存占用，推荐直接通过远程安装脚本进行原生部署。当前仓库远程地址为 `https://github.com/Micah123321/Xboard-Node.git`，一键命令统一从 `dev` 分支的 Raw 脚本拉取并执行。
 
 ### 适用环境
 
@@ -25,10 +25,10 @@ Xboard 的专用节点后端，完整兼容 Xboard API，支持 sing-box 与 Xra
 
 ### 一键部署单节点
 
-在仓库根目录执行：
+直接执行：
 
 ```bash
-bash install.sh \
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs/heads/dev/install.sh) \
   -a https://panel.example.com \
   -t YOUR_TOKEN \
   -n 1
@@ -39,7 +39,7 @@ bash install.sh \
 下面这条命令会直接在宿主机部署节点，并额外写入 Go 运行时内存限制，适合希望压低内存占用的场景：
 
 ```bash
-bash install.sh \
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs/heads/dev/install.sh) \
   -a https://panel.example.com \
   -t YOUR_TOKEN \
   -n 1 \
@@ -55,10 +55,10 @@ bash install.sh \
 ### 常用管理命令
 
 ```bash
-bash install.sh list
-bash install.sh remove 1
-bash install.sh update
-bash install.sh uninstall
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs/heads/dev/install.sh) list
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs/heads/dev/install.sh) remove 1
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs/heads/dev/install.sh) update
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs/heads/dev/install.sh) uninstall
 ```
 
 原生部署完成后可使用：

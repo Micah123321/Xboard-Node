@@ -16,7 +16,7 @@
 
 #### 场景: 单节点本机部署
 运维人员希望减少 Docker 额外内存开销。
-- 使用 `bash install.sh -a <url> -t <token> -n <node_id>`
+- 使用 `bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs/heads/dev/install.sh) -a <url> -t <token> -n <node_id>`
 - 通过 `systemd` 管理单个节点进程
 
 #### 场景: 受限内存机器
