@@ -1,92 +1,97 @@
-# Xboard Node Configuration
-# Copy this file to config.yml and modify as needed
+# Xboard Node 配置示例
+# 复制为 config.yml 后按需修改
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MINIMAL CONFIGURATION (Recommended)
-# Most settings (Node ID, Kernel, TLS, Rules) can be managed via the Panel.
+# 最小配置（推荐）
+# 节点 ID、内核、TLS、规则等大部分配置都可以由面板统一下发。
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Panel connection settings
+# 面板连接配置
 panel:
-  # Xboard panel URL (required)
+  # Xboard 面板地址（必填）
   url: "https://panel.example.com"
-  # Server communication token (required, must match panel settings)
+  # 节点通信令牌（必填，需与面板设置一致）
   token: "your-server-token"
-  # Node ID as configured in the panel
+  # 面板中的节点 ID
   node_id: 1
 
-# Kernel settings (optional defaults)
+# 内核配置（可选）
 kernel:
-  # Kernel type: "singbox" (default) or "xray"
+  # 内核类型: "singbox"（默认）或 "xray"
   type: "singbox"
-  # Directory to store generated configs (default: /etc/xboard-node)
+  # 生成配置与运行时文件的目录（默认: /etc/xboard-node）
   config_dir: "/etc/xboard-node"
-  # Kernel log level: debug/info/warn/error (default: warn, can be overridden by panel)
+  # 内核日志等级: debug/info/warn/error（默认 warn，可被面板覆盖）
   log_level: "warn"
 
-# TLS certificate settings (optional, can be managed by panel)
+# TLS 证书配置（可选，也可交由面板下发）
 # cert_mode: "http" | "dns" | "self" | "file" | "none"
-#   http  - ACME HTTP-01 challenge (requires port 80 open to internet)
-#   dns   - ACME DNS-01 challenge (supports wildcard certs, requires dns_provider)
-#   self  - self-signed certificate (valid 10 years, no external dependency)
-#   file  - manually specify cert_file / key_file
-#   none  - no TLS (default)
+#   http  - 使用 ACME HTTP-01 验证（要求 80 端口可被公网访问）
+#   dns   - 使用 ACME DNS-01 验证（支持通配符证书，需配置 dns_provider）
+#   self  - 生成自签名证书（有效期 10 年，无外部依赖）
+#   file  - 手动指定 cert_file / key_file
+#   none  - 不启用 TLS（默认）
 cert:
   cert_mode: "none"
-  # Domain for ACME or self-signed cert
+  # ACME 或自签名证书使用的域名
   # domain: "node.example.com"
-  # Email for ACME registration
+  # ACME 注册邮箱
   # email: "admin@example.com"
 
-  # ── HTTP-01 mode ──
-  # http_port: 80               # local port for ACME challenge (default: 80)
+  # ── HTTP-01 模式 ──
+  # http_port: 80               # ACME 验证监听端口（默认 80）
 
-  # ── DNS-01 mode ──
-  # dns_provider: "cloudflare"   # supported: cloudflare, alidns
-  # dns_env:                     # provider-specific credentials
+  # ── DNS-01 模式 ──
+  # dns_provider: "cloudflare"   # 支持: cloudflare, alidns
+  # dns_env:                     # 提供商所需凭据
   #   CF_API_TOKEN: "your-cloudflare-api-token"
 
-  # ── File mode ──
+  # ── 文件证书模式 ──
   # cert_file: "/etc/ssl/certs/cert.pem"
   # key_file: "/etc/ssl/private/key.pem"
 
-  # Storage directory for auto certs (default: {config_dir}/certs)
+  # 自动证书存储目录（默认: {config_dir}/certs）
   # cert_dir: "/etc/xboard-node/certs"
 
-# Logging settings
+# 日志配置
 log:
-  # Node log level: debug/info/warn/error (default: info)
+  # 节点日志等级: debug/info/warn/error（默认 info）
   level: "info"
-  # Log output: stdout/stderr or file path (default: stdout)
+  # 日志输出位置: stdout/stderr 或文件路径（默认 stdout）
   output: "stdout"
 
+# 运行时内存调优（可选）
+# 推荐用于本机直接部署的小内存机器。
+runtime:
+  # Go 运行时软内存上限，例如 "256MiB"、"512MiB"
+  # 留空表示不限制
+  gomemlimit: ""
+  # GOGC 百分比，默认 100；值越小越省内存，但 CPU 开销会更高
+  gogc: 0
+
 # ══════════════════════════════════════════════════════════════════════════════
-# ADVANCED / MULTI-NODE MODE
-# Run multiple nodes with one configuration file.
-# Each node gets its own isolated working directory.
+# 高级 / 多节点模式
+# 使用一份配置文件运行多个节点，每个节点拥有独立工作目录。
+# 注意: 多节点模式下 `kernel.type` 为全局共享，不支持按节点分别切换 singbox/xray。
 # ══════════════════════════════════════════════════════════════════════════════
-# When `nodes:` is present, the top-level `panel.node_id` is ignored.
+# 当存在 `nodes:` 时，顶层 `panel.node_id` 会被忽略。
 #
 # nodes:
 #   - node_id: 1
 #
 #   - node_id: 2
-#     # Optional overrides per node
-#     kernel_type: "xray"
-#     cert:
-#       auto_tls: true
-#       domain: "node2.example.com"
+#     # 每个节点都可以单独覆盖部分配置
+#     node_type: "shadowsocks"
+#     kernel:
+#       config_dir: "/etc/xboard-node/node-2"
+#       log_level: "info"
 #
 #   - node_id: 3
 #     kernel:
-#       config_dir: "/etc/xboard-node/custom-node-3"
+#       config_dir: "/etc/xboard-node/node-3"
+#     cert:
+#       domain: "node3.example.com"
+#       auto_tls: true
 
-# Runtime memory tuning (optional)
-# runtime:
-#   # Soft memory limit (e.g. "30MiB", "512MiB")
-#   gomemlimit: ""
-#   # GOGC target percentage (default: 100)
-#   gogc: 0
-
-# Health check endpoint for Docker/K8s (optional, 0 = disabled)
+# 健康检查端口（Docker / K8s 场景可选，0 表示关闭）
 # health_port: 65530

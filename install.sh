@@ -1,18 +1,21 @@
 #!/bin/bash
 set -e
 
-# xboard-node Multi-Node Deploy Script
-# Supports: Ubuntu 20+, Debian 11+, CentOS 8+, Alpine 3.18+
+# xboard-node 多节点部署脚本
+# 支持: Ubuntu 20+, Debian 11+, CentOS 8+, Alpine 3.18+
 #
-# One-command deploy (non-interactive):
+# 本机一键部署（默认，不带 --docker）:
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 1
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 2 -k xray
+#   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 3 --gomemlimit 256MiB --gogc 50
+#
+# Docker 部署:
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 3 --docker
 #
-# Interactive:
+# 交互模式:
 #   bash install.sh
 #
-# Management:
+# 管理命令:
 #   bash install.sh list
 #   bash install.sh remove <node_id>
 #   bash install.sh update
@@ -31,12 +34,14 @@ SERVICE_TEMPLATE="xboard-node@.service"
 DOCKER_COMPOSE_FILE="${CONFIG_DIR}/docker-compose.yml"
 DOCKER_IMAGE="ghcr.io/cedar2025/xboard-node:latest"
 
-# Parsed parameters (populated by parse_args)
+# 解析后的参数
 PANEL_URL=""
 PANEL_TOKEN=""
 NODE_ID=""
 NODE_TYPE=""
 KERNEL_TYPE="singbox"
+GOMEMLIMIT=""
+GOGC=""
 DOCKER_MODE=0
 SUBCOMMAND=""
 
@@ -45,17 +50,19 @@ log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step()  { echo -e "${CYAN}[STEP]${NC} ${BOLD}$1${NC}"; }
 
-# ─── Argument Parsing ─────────────────────────────────────────────────
+# ─── 参数解析 ────────────────────────────────────────────────────────
 
 parse_args() {
     while [ $# -gt 0 ]; do
         case "$1" in
-            -a|--api)       PANEL_URL="$2";    shift 2 ;;
-            -t|--token)     PANEL_TOKEN="$2";  shift 2 ;;
-            -n|--node-id)   NODE_ID="$2";      shift 2 ;;
-            -T|--node-type) NODE_TYPE="$2";    shift 2 ;;
-            -k|--kernel)    KERNEL_TYPE="$2";   shift 2 ;;
-            --docker)       DOCKER_MODE=1;      shift ;;
+            -a|--api)        PANEL_URL="$2";      shift 2 ;;
+            -t|--token)      PANEL_TOKEN="$2";    shift 2 ;;
+            -n|--node-id)    NODE_ID="$2";        shift 2 ;;
+            -T|--node-type)  NODE_TYPE="$2";      shift 2 ;;
+            -k|--kernel)     KERNEL_TYPE="$2";    shift 2 ;;
+            --gomemlimit)    GOMEMLIMIT="$2";     shift 2 ;;
+            --gogc)          GOGC="$2";           shift 2 ;;
+            --docker)        DOCKER_MODE=1;         shift ;;
             add|remove|list|update|uninstall|help|--help|-h)
                 if [ -z "$SUBCOMMAND" ]; then
                     SUBCOMMAND="$1"
@@ -71,7 +78,6 @@ parse_args() {
         esac
     done
 
-    # Normalize kernel type
     case "$KERNEL_TYPE" in
         xray|Xray|XRAY) KERNEL_TYPE="xray" ;;
         *) KERNEL_TYPE="singbox" ;;
@@ -84,28 +90,32 @@ has_all_params() {
 
 validate_params() {
     if [ -z "$PANEL_URL" ]; then
-        log_error "Panel URL is required (-a/--api)"
+        log_error "必须提供面板地址 (-a/--api)"
         exit 1
     fi
     if [ -z "$PANEL_TOKEN" ]; then
-        log_error "Server Token is required (-t/--token)"
+        log_error "必须提供服务端令牌 (-t/--token)"
         exit 1
     fi
     if [ -z "$NODE_ID" ]; then
-        log_error "Node ID is required (-n/--node-id)"
+        log_error "必须提供节点 ID (-n/--node-id)"
         exit 1
     fi
     if ! [[ "$NODE_ID" =~ ^[0-9]+$ ]]; then
-        log_error "Node ID must be a positive integer, got: $NODE_ID"
+        log_error "节点 ID 必须是正整数，当前值: $NODE_ID"
+        exit 1
+    fi
+    if [ -n "$GOGC" ] && ! [[ "$GOGC" =~ ^[0-9]+$ ]]; then
+        log_error "GOGC 必须是非负整数，当前值: $GOGC"
         exit 1
     fi
 }
 
-# ─── System Detection ────────────────────────────────────────────────
+# ─── 系统检测 ────────────────────────────────────────────────────────
 
 check_root() {
     if [ "$(id -u)" != "0" ]; then
-        log_error "Please run as root (or with sudo)"
+        log_error "请使用 root 用户执行，或通过 sudo 运行"
         exit 1
     fi
 }
@@ -117,7 +127,7 @@ detect_arch() {
         aarch64|arm64) ARCH="arm64" ;;
         armv7l) ARCH="armv7" ;;
         *)
-            log_error "Unsupported architecture: $ARCH"
+            log_error "不支持的架构: $ARCH"
             exit 1
             ;;
     esac
@@ -149,7 +159,7 @@ install_deps() {
     esac
 }
 
-# ─── Binary Install ──────────────────────────────────────────────────
+# ─── 二进制安装 ──────────────────────────────────────────────────────
 
 is_binary_installed() {
     [ -x "${INSTALL_DIR}/xboard-node" ]
@@ -157,11 +167,11 @@ is_binary_installed() {
 
 install_binary() {
     if is_binary_installed; then
-        log_info "xboard-node binary already installed"
+        log_info "xboard-node 二进制已存在，跳过下载"
         return
     fi
 
-    log_step "Installing xboard-node binary..."
+    log_step "安装 xboard-node 二进制..."
 
     local src=""
 
@@ -173,25 +183,25 @@ install_binary() {
 
     if [ -n "$src" ]; then
         cp "$src" "${INSTALL_DIR}/xboard-node"
-        log_info "Installed from local file: $src"
+        log_info "已从本地文件安装: $src"
     else
         local url="https://github.com/cedar2025/xboard-node/releases/latest/download/xboard-node-linux-${ARCH}"
-        log_info "Downloading from GitHub releases..."
+        log_info "正在从 GitHub Releases 下载..."
         if wget -q "$url" -O "${INSTALL_DIR}/xboard-node" 2>/dev/null; then
-            log_info "Downloaded successfully"
+            log_info "下载完成"
         elif curl -fsSL "$url" -o "${INSTALL_DIR}/xboard-node" 2>/dev/null; then
-            log_info "Downloaded successfully"
+            log_info "下载完成"
         else
-            log_error "Failed to download. Place xboard-node binary in current directory and retry."
+            log_error "下载失败。请先将对应架构的二进制放到当前目录后重试。"
             exit 1
         fi
     fi
 
     chmod +x "${INSTALL_DIR}/xboard-node"
-    log_info "xboard-node installed to ${INSTALL_DIR}/xboard-node"
+    log_info "xboard-node 已安装到 ${INSTALL_DIR}/xboard-node"
 }
 
-# ─── Systemd Template ────────────────────────────────────────────────
+# ─── systemd 模板 ───────────────────────────────────────────────────
 
 install_systemd_template() {
     if ! command -v systemctl >/dev/null 2>&1; then
@@ -202,7 +212,7 @@ install_systemd_template() {
         return
     fi
 
-    log_step "Installing systemd service template..."
+    log_step "安装 systemd 服务模板..."
 
     cat > "/etc/systemd/system/${SERVICE_TEMPLATE}" << 'UNIT'
 [Unit]
@@ -224,10 +234,10 @@ WantedBy=multi-user.target
 UNIT
 
     systemctl daemon-reload
-    log_info "Systemd template installed: ${SERVICE_TEMPLATE}"
+    log_info "systemd 模板已安装: ${SERVICE_TEMPLATE}"
 }
 
-# ─── Migrate Legacy Config ───────────────────────────────────────────
+# ─── 迁移旧版单节点配置 ──────────────────────────────────────────────
 
 migrate_legacy_config() {
     if [ -f "${CONFIG_DIR}/config.yml" ] && [ ! -d "${CONFIG_DIR}/config.yml" ]; then
@@ -239,7 +249,7 @@ migrate_legacy_config() {
         fi
 
         if [ ! -d "${CONFIG_DIR}/${legacy_id}" ]; then
-            log_warn "Migrating legacy config to multi-node layout: node ${legacy_id}"
+            log_warn "检测到旧版单节点配置，正在迁移到多节点目录布局: node ${legacy_id}"
             mkdir -p "${CONFIG_DIR}/${legacy_id}"
             mv "${CONFIG_DIR}/config.yml" "${CONFIG_DIR}/${legacy_id}/config.yml"
 
@@ -251,70 +261,95 @@ migrate_legacy_config() {
                 install_systemd_template
                 systemctl enable "xboard-node@${legacy_id}" 2>/dev/null || true
                 systemctl start "xboard-node@${legacy_id}" 2>/dev/null || true
-                log_info "Migrated service: xboard-node → xboard-node@${legacy_id}"
+                log_info "服务已迁移: xboard-node → xboard-node@${legacy_id}"
             fi
         fi
     fi
 }
 
-# ─── Interactive Prompts ──────────────────────────────────────────────
+# ─── 交互式输入 ──────────────────────────────────────────────────────
 
 prompt_missing_params() {
     echo ""
-    log_step "=== Node Configuration ==="
+    log_step "=== 节点配置 ==="
     echo ""
 
     if [ -z "$PANEL_URL" ]; then
-        read -rp "  Panel URL (e.g. https://panel.example.com): " PANEL_URL
+        read -rp "  面板地址 (例如 https://panel.example.com): " PANEL_URL
     else
-        echo -e "  Panel URL: ${CYAN}${PANEL_URL}${NC}"
+        echo -e "  面板地址: ${CYAN}${PANEL_URL}${NC}"
     fi
 
     if [ -z "$PANEL_TOKEN" ]; then
-        read -rp "  Server Token: " PANEL_TOKEN
+        read -rp "  服务端令牌: " PANEL_TOKEN
     else
-        echo -e "  Server Token: ${CYAN}${PANEL_TOKEN:0:8}***${NC}"
+        echo -e "  服务端令牌: ${CYAN}${PANEL_TOKEN:0:8}***${NC}"
     fi
 
     if [ -z "$NODE_ID" ]; then
-        read -rp "  Node ID: " NODE_ID
+        read -rp "  节点 ID: " NODE_ID
     else
-        echo -e "  Node ID: ${CYAN}${NODE_ID}${NC}"
+        echo -e "  节点 ID: ${CYAN}${NODE_ID}${NC}"
     fi
 
     if [ -n "$NODE_TYPE" ]; then
-        echo -e "  Node Type: ${CYAN}${NODE_TYPE}${NC}"
+        echo -e "  节点类型: ${CYAN}${NODE_TYPE}${NC}"
     fi
 
     if [ -n "$KERNEL_TYPE" ] && [ "$KERNEL_TYPE" != "singbox" ]; then
-        echo -e "  Kernel: ${CYAN}${KERNEL_TYPE}${NC}"
+        echo -e "  内核类型: ${CYAN}${KERNEL_TYPE}${NC}"
     else
         echo ""
-        echo "  Kernel type:"
-        echo "    1) singbox (default, recommended)"
+        echo "  内核类型:"
+        echo "    1) singbox (默认，推荐)"
         echo "    2) xray"
-        read -rp "  Choose [1/2]: " KERNEL_CHOICE
+        read -rp "  请选择 [1/2]: " KERNEL_CHOICE
         case "$KERNEL_CHOICE" in
             2) KERNEL_TYPE="xray" ;;
             *) KERNEL_TYPE="singbox" ;;
         esac
     fi
 
+    if [ -z "$GOMEMLIMIT" ]; then
+        read -rp "  Go 内存软上限 (例如 256MiB，留空跳过): " GOMEMLIMIT
+    else
+        echo -e "  Go 内存软上限: ${CYAN}${GOMEMLIMIT}${NC}"
+    fi
+
+    if [ -z "$GOGC" ]; then
+        read -rp "  GOGC 百分比 (例如 50，留空跳过): " GOGC
+    else
+        echo -e "  GOGC 百分比: ${CYAN}${GOGC}${NC}"
+    fi
+
     echo ""
     validate_params
 }
 
-# ─── Node Operations ─────────────────────────────────────────────────
+# ─── 节点操作 ────────────────────────────────────────────────────────
 
 write_node_config() {
     local node_id="$1"
     local node_dir="${CONFIG_DIR}/${node_id}"
+    local runtime_block=""
 
     mkdir -p "$node_dir"
 
     local node_type_line=""
     if [ -n "$NODE_TYPE" ]; then
         node_type_line="  node_type: \"${NODE_TYPE}\""
+    fi
+
+    if [ -n "$GOMEMLIMIT" ] || [ -n "$GOGC" ]; then
+        runtime_block="runtime:"
+        if [ -n "$GOMEMLIMIT" ]; then
+            runtime_block="${runtime_block}
+  gomemlimit: \"${GOMEMLIMIT}\""
+        fi
+        if [ -n "$GOGC" ]; then
+            runtime_block="${runtime_block}
+  gogc: ${GOGC}"
+        fi
     fi
 
     cat > "${node_dir}/config.yml" << EOF
@@ -333,20 +368,22 @@ kernel:
   config_dir: "${node_dir}"
   log_level: "warn"
 
+${runtime_block}
+
 log:
   level: "info"
   output: "stdout"
 EOF
 
-    log_info "Config written: ${node_dir}/config.yml"
+    log_info "配置已写入: ${node_dir}/config.yml"
 }
 
 add_node_native() {
     local node_id="$1"
 
     if [ -d "${CONFIG_DIR}/${node_id}" ]; then
-        log_error "Node ${node_id} already exists at ${CONFIG_DIR}/${node_id}/"
-        log_info "To reconfigure, first remove it: $0 remove ${node_id}"
+        log_error "节点 ${node_id} 已存在: ${CONFIG_DIR}/${node_id}/"
+        log_info "如需重新配置，请先删除: $0 remove ${node_id}"
         exit 1
     fi
 
@@ -356,9 +393,9 @@ add_node_native() {
         install_systemd_template
         systemctl enable "xboard-node@${node_id}"
         systemctl start "xboard-node@${node_id}"
-        log_info "Service started: xboard-node@${node_id}"
+        log_info "服务已启动: xboard-node@${node_id}"
     else
-        log_warn "No systemd found. Start manually:"
+        log_warn "未检测到 systemd，请手动运行:"
         echo "  xboard-node -c ${CONFIG_DIR}/${node_id}/config.yml"
     fi
 }
@@ -367,14 +404,14 @@ add_node_docker() {
     local node_id="$1"
 
     if [ -d "${CONFIG_DIR}/${node_id}" ]; then
-        log_error "Node ${node_id} already exists at ${CONFIG_DIR}/${node_id}/"
-        log_info "To reconfigure, first remove it: $0 remove ${node_id}"
+        log_error "节点 ${node_id} 已存在: ${CONFIG_DIR}/${node_id}/"
+        log_info "如需重新配置，请先删除: $0 remove ${node_id}"
         exit 1
     fi
 
     write_node_config "$node_id"
     regenerate_docker_compose
-    log_info "Docker compose updated: ${DOCKER_COMPOSE_FILE}"
+    log_info "Docker Compose 已更新: ${DOCKER_COMPOSE_FILE}"
 
     if command -v docker >/dev/null 2>&1; then
         if docker compose version >/dev/null 2>&1; then
@@ -382,15 +419,15 @@ add_node_docker() {
         elif command -v docker-compose >/dev/null 2>&1; then
             COMPOSE_CMD="docker-compose"
         else
-            log_warn "docker compose not found. Start manually:"
+            log_warn "未找到 docker compose，请手动启动:"
             echo "  cd ${CONFIG_DIR} && docker compose up -d"
             return
         fi
         cd "${CONFIG_DIR}"
         ${COMPOSE_CMD} up -d "node-${node_id}"
-        log_info "Container started: xboard-node-${node_id}"
+        log_info "容器已启动: xboard-node-${node_id}"
     else
-        log_warn "Docker not installed. Install Docker first, then run:"
+        log_warn "未检测到 Docker，请先安装后再执行:"
         echo "  cd ${CONFIG_DIR} && docker compose up -d"
     fi
 }
@@ -436,12 +473,12 @@ EOF
     done
 }
 
-# ─── Deploy Node (unified entry) ─────────────────────────────────────
+# ─── 部署入口 ────────────────────────────────────────────────────────
 
 deploy_node() {
     if has_all_params; then
         validate_params
-        log_info "Deploying node ${NODE_ID} (${KERNEL_TYPE}) → ${PANEL_URL}"
+        log_info "开始部署节点 ${NODE_ID} (${KERNEL_TYPE}) → ${PANEL_URL}"
     else
         prompt_missing_params
     fi
@@ -453,48 +490,55 @@ deploy_node() {
     fi
 
     echo ""
-    echo -e "${GREEN}=== Node ${NODE_ID} Deployed ===${NC}"
+    echo -e "${GREEN}=== 节点 ${NODE_ID} 部署完成 ===${NC}"
     echo ""
 
     if [ "$DOCKER_MODE" -eq 1 ]; then
-        echo "  Manage:"
-        echo "    Logs:    docker logs -f xboard-node-${NODE_ID}"
-        echo "    Stop:    cd ${CONFIG_DIR} && docker compose stop node-${NODE_ID}"
-        echo "    Restart: cd ${CONFIG_DIR} && docker compose restart node-${NODE_ID}"
+        echo "  管理命令:"
+        echo "    日志:    docker logs -f xboard-node-${NODE_ID}"
+        echo "    停止:    cd ${CONFIG_DIR} && docker compose stop node-${NODE_ID}"
+        echo "    重启:    cd ${CONFIG_DIR} && docker compose restart node-${NODE_ID}"
     else
-        echo "  Manage:"
-        echo "    Status:  systemctl status xboard-node@${NODE_ID}"
-        echo "    Logs:    journalctl -u xboard-node@${NODE_ID} -f"
-        echo "    Stop:    systemctl stop xboard-node@${NODE_ID}"
-        echo "    Restart: systemctl restart xboard-node@${NODE_ID}"
+        echo "  管理命令:"
+        echo "    状态:    systemctl status xboard-node@${NODE_ID}"
+        echo "    日志:    journalctl -u xboard-node@${NODE_ID} -f"
+        echo "    停止:    systemctl stop xboard-node@${NODE_ID}"
+        echo "    重启:    systemctl restart xboard-node@${NODE_ID}"
+    fi
+
+    if [ -n "$GOMEMLIMIT" ] || [ -n "$GOGC" ]; then
+        echo ""
+        echo "  运行时内存调优:"
+        [ -n "$GOMEMLIMIT" ] && echo "    GOMEMLIMIT: ${GOMEMLIMIT}"
+        [ -n "$GOGC" ] && echo "    GOGC:       ${GOGC}"
     fi
 
     echo ""
-    echo "  Config:  ${CONFIG_DIR}/${NODE_ID}/config.yml"
+    echo "  配置文件: ${CONFIG_DIR}/${NODE_ID}/config.yml"
     echo ""
 }
 
-# ─── Remove Node ──────────────────────────────────────────────────────
+# ─── 删除节点 ────────────────────────────────────────────────────────
 
 remove_node() {
     local node_id="$1"
 
     if [ -z "$node_id" ]; then
-        log_error "Usage: $0 remove <node_id>"
+        log_error "用法: $0 remove <node_id>"
         exit 1
     fi
 
     if [ ! -d "${CONFIG_DIR}/${node_id}" ]; then
-        log_error "Node ${node_id} not found"
+        log_error "未找到节点 ${node_id}"
         exit 1
     fi
 
-    log_step "Removing node ${node_id}..."
+    log_step "正在删除节点 ${node_id}..."
 
     if command -v systemctl >/dev/null 2>&1; then
         systemctl stop "xboard-node@${node_id}" 2>/dev/null || true
         systemctl disable "xboard-node@${node_id}" 2>/dev/null || true
-        log_info "Systemd service stopped and disabled"
+        log_info "systemd 服务已停止并禁用"
     fi
 
     if command -v docker >/dev/null 2>&1; then
@@ -502,17 +546,17 @@ remove_node() {
     fi
 
     rm -rf "${CONFIG_DIR}/${node_id}"
-    log_info "Config removed: ${CONFIG_DIR}/${node_id}/"
+    log_info "已删除配置目录: ${CONFIG_DIR}/${node_id}/"
 
     regenerate_docker_compose
-    log_info "Node ${node_id} removed"
+    log_info "节点 ${node_id} 已删除"
 }
 
-# ─── List Nodes ───────────────────────────────────────────────────────
+# ─── 列出节点 ────────────────────────────────────────────────────────
 
 list_nodes() {
     echo ""
-    echo -e "${BOLD}  Deployed Nodes${NC}"
+    echo -e "${BOLD}  已部署节点${NC}"
     echo -e "  ────────────────────────────────────────────"
 
     local found=0
@@ -545,19 +589,20 @@ list_nodes() {
     done
 
     if [ "$found" -eq 0 ]; then
-        echo "  No nodes deployed yet."
+        echo "  目前还没有已部署节点。"
         echo ""
-        echo "  Deploy your first node:"
+        echo "  可以先部署第一个节点:"
         echo "    $0 -a https://panel.example.com -t TOKEN -n 1"
+        echo "    $0 -a https://panel.example.com -t TOKEN -n 1 --gomemlimit 256MiB --gogc 50"
         echo "    $0 -a https://panel.example.com -t TOKEN -n 1 --docker"
     fi
     echo ""
 }
 
-# ─── Update / Uninstall ──────────────────────────────────────────────
+# ─── 更新 / 卸载 ─────────────────────────────────────────────────────
 
 update_binary() {
-    log_step "Updating xboard-node binary..."
+    log_step "更新 xboard-node 二进制..."
 
     detect_arch
 
@@ -567,9 +612,9 @@ update_binary() {
     if wget -q "$url" -O "$tmp" 2>/dev/null || curl -fsSL "$url" -o "$tmp" 2>/dev/null; then
         chmod +x "$tmp"
         mv "$tmp" "${INSTALL_DIR}/xboard-node"
-        log_info "Binary updated"
+        log_info "二进制更新完成"
     else
-        log_error "Failed to download update"
+        log_error "更新下载失败"
         rm -f "$tmp"
         exit 1
     fi
@@ -581,19 +626,19 @@ update_binary() {
             nid=$(basename "$dir")
             if systemctl is-active "xboard-node@${nid}" >/dev/null 2>&1; then
                 systemctl restart "xboard-node@${nid}"
-                log_info "Restarted: xboard-node@${nid}"
+                log_info "已重启: xboard-node@${nid}"
             fi
         done
     fi
 
     if [ -f "${DOCKER_COMPOSE_FILE}" ] && command -v docker >/dev/null 2>&1; then
-        log_info "For Docker nodes, pull the latest image and restart:"
+        log_info "如需更新 Docker 节点，请执行:"
         echo "  cd ${CONFIG_DIR} && docker compose pull && docker compose up -d"
     fi
 }
 
 do_uninstall() {
-    log_step "Uninstalling xboard-node..."
+    log_step "卸载 xboard-node..."
 
     if command -v systemctl >/dev/null 2>&1; then
         for dir in "${CONFIG_DIR}"/*/; do
@@ -620,61 +665,67 @@ do_uninstall() {
     fi
 
     rm -f "${INSTALL_DIR}/xboard-node"
-    log_info "Binary removed"
+    log_info "二进制已删除"
 
     echo ""
-    read -rp "  Delete all configs? (${CONFIG_DIR}) [y/N]: " DELETE_ALL
+    read -rp "  是否删除所有配置? (${CONFIG_DIR}) [y/N]: " DELETE_ALL
     if [[ "$DELETE_ALL" =~ ^[Yy]$ ]]; then
         rm -rf "${CONFIG_DIR}"
-        log_info "All configs removed"
+        log_info "所有配置已删除"
     else
-        log_info "Configs preserved at ${CONFIG_DIR}/"
+        log_info "配置保留在 ${CONFIG_DIR}/"
     fi
 
-    log_info "xboard-node uninstalled"
+    log_info "xboard-node 已卸载"
 }
 
-# ─── Print Help ───────────────────────────────────────────────────────
+# ─── 帮助信息 ────────────────────────────────────────────────────────
 
 print_help() {
     cat << 'HELP'
 
-  xboard-node Deploy Script
+  xboard-node 部署脚本
 
-  DEPLOY A NODE (one command, repeat for each node):
+  本机部署（默认，推荐，适合减少 Docker 内存占用）:
 
-    install.sh -a <url> -t <token> -n <node_id> [-T <node_type>] [-k singbox|xray] [--docker]
+    install.sh -a <url> -t <token> -n <node_id> [-T <node_type>] [-k singbox|xray] [--gomemlimit 256MiB] [--gogc 50]
 
-  OPTIONS:
-    -a, --api        Panel URL          (e.g. https://panel.example.com)
-    -t, --token      Server Token       (from panel settings)
-    -n, --node-id    Node ID            (positive integer)
-    -T, --node-type  Node type          (optional, auto-detected from panel)
-    -k, --kernel     Kernel type        (singbox or xray, default: singbox)
-    --docker         Use Docker instead of systemd
+  Docker 部署:
 
-  EXAMPLES:
+    install.sh -a <url> -t <token> -n <node_id> [--docker]
 
-    # Deploy node 1 (sing-box, systemd):
+  参数说明:
+    -a, --api          面板地址          (例如 https://panel.example.com)
+    -t, --token        服务端令牌        (面板节点设置中的 Token)
+    -n, --node-id      节点 ID           (正整数)
+    -T, --node-type    节点类型          (可选，可由面板自动识别)
+    -k, --kernel       内核类型          (singbox 或 xray，默认: singbox)
+        --gomemlimit   Go 内存软上限     (例如 256MiB、512MiB)
+        --gogc         Go GC 百分比      (例如 50、100)
+        --docker       使用 Docker 部署  (默认不开启)
+
+  示例:
+
+    # 本机部署节点 1（sing-box）
     bash install.sh -a https://panel.example.com -t mytoken123 -n 1
 
-    # Deploy node 2 (xray, systemd):
-    bash install.sh -a https://panel.example.com -t mytoken123 -n 2 -k xray
+    # 本机部署节点 2（xray）并限制内存
+    bash install.sh -a https://panel.example.com -t mytoken123 -n 2 -k xray --gomemlimit 256MiB --gogc 50
 
-    # Deploy node 3 with explicit type (Docker):
-    bash install.sh -a https://panel.example.com -t mytoken123 -n 3 -T shadowsocks --docker
+    # Docker 部署节点 3
+    bash install.sh -a https://panel.example.com -t mytoken123 -n 3 --docker
 
-    # Interactive mode (will prompt for all params):
+    # 交互模式
     bash install.sh
 
-  MANAGEMENT:
+  管理命令:
 
-    bash install.sh list               List all deployed nodes
-    bash install.sh remove <node_id>   Remove a node
-    bash install.sh update             Update binary + restart all nodes
-    bash install.sh uninstall          Remove everything
+    bash install.sh list               列出所有已部署节点
+    bash install.sh remove <node_id>   删除指定节点
+    bash install.sh update             更新二进制并重启原生节点
+    bash install.sh uninstall          卸载全部内容
 
-  DOCKER (env-var mode, no config file needed):
+  Docker 环境变量模式（无需配置文件）:
 
     docker run -d --restart=always --network=host \
       -e apiHost=https://panel.example.com \
@@ -685,7 +736,7 @@ print_help() {
 HELP
 }
 
-# ─── Main ─────────────────────────────────────────────────────────────
+# ─── 主程序 ──────────────────────────────────────────────────────────
 
 main() {
     parse_args "$@"
@@ -725,7 +776,7 @@ main() {
             deploy_node
             ;;
         *)
-            log_error "Unknown command: $SUBCOMMAND"
+            log_error "未知命令: $SUBCOMMAND"
             print_help
             exit 1
             ;;
