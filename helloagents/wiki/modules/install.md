@@ -1,4 +1,4 @@
-# 安装部署
+﻿# 安装部署
 
 ## 目的
 定义项目的推荐部署方式、安装脚本能力和运维入口。
@@ -24,5 +24,12 @@
 - 支持在安装阶段写入 `runtime.gomemlimit`
 - 支持在安装阶段写入 `runtime.gogc`
 
+#### 场景: 当前仓库自动发布与安装
+当前仓库 `Micah123321/Xboard-Node` 推送到 `dev` 分支后需要自动产出可安装版本。
+- GitHub Actions 自动更新当前仓库的 Release 资产
+- `install.sh` 与 `update` 默认从当前仓库下载最新二进制
+- Docker 默认拉取 `ghcr.io/micah123321/xboard-node:latest`
+
 ## 变更历史
 - [202603200133_docs_cn_native_deploy](../../history/2026-03/202603200133_docs_cn_native_deploy/) - 补充中文文档、原生部署说明与内存调优参数
+- 2026-03-20: 统一当前仓库的 Action、Release 和安装脚本来源，安装与更新默认跟随 `Micah123321/Xboard-Node`

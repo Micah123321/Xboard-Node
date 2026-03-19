@@ -14,7 +14,7 @@ Xboard 的专用节点后端，完整兼容 Xboard API，支持 sing-box 与 Xra
 
 ## 推荐部署方式：本机直接部署
 
-如果你希望避免 Docker 带来的额外内存占用，推荐直接通过远程安装脚本进行原生部署。当前仓库远程地址为 `https://github.com/Micah123321/Xboard-Node.git`，一键命令统一从 `dev` 分支的 Raw 脚本拉取并执行。
+如果你希望避免 Docker 带来的额外内存占用，推荐直接通过远程安装脚本进行原生部署。当前仓库远程地址为 `https://github.com/Micah123321/Xboard-Node.git`，一键命令统一从 `dev` 分支的 Raw 脚本拉取并执行；推送到当前仓库 `dev` 分支后，GitHub Actions 会自动更新当前仓库的 Release，`install.sh` 的安装和 `update` 也会默认跟随这里的最新产物。
 
 ### 适用环境
 
@@ -78,7 +78,7 @@ docker run -d --restart=always --network=host \
   -e apiHost=https://panel.example.com \
   -e apiKey=YOUR_TOKEN \
   -e nodeID=1 \
-  ghcr.io/cedar2025/xboard-node:latest
+  ghcr.io/micah123321/xboard-node:latest
 ```
 
 ## 源码构建

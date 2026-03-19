@@ -32,7 +32,12 @@ INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/xboard-node"
 SERVICE_TEMPLATE="xboard-node@.service"
 DOCKER_COMPOSE_FILE="${CONFIG_DIR}/docker-compose.yml"
-DOCKER_IMAGE="ghcr.io/cedar2025/xboard-node:latest"
+RELEASE_REPO_DEFAULT="Micah123321/Xboard-Node"
+RELEASE_REPO="${XBOARD_RELEASE_REPO:-$RELEASE_REPO_DEFAULT}"
+RELEASE_REPO_LC="$(printf '%s' "$RELEASE_REPO" | tr '[:upper:]' '[:lower:]')"
+REPO_URL="https://github.com/${RELEASE_REPO}"
+RELEASES_BASE_URL="${REPO_URL}/releases"
+DOCKER_IMAGE="ghcr.io/${RELEASE_REPO_LC}:latest"
 
 # 解析后的参数
 PANEL_URL=""
@@ -159,6 +164,29 @@ install_deps() {
     esac
 }
 
+download_release_asset() {
+    local asset_name="$1"
+    local dest="$2"
+    local tmp
+    local url
+    local urls=(
+        "${RELEASES_BASE_URL}/latest/download/${asset_name}"
+        "${RELEASES_BASE_URL}/download/dev/${asset_name}"
+    )
+
+    tmp="$(mktemp)"
+    for url in "${urls[@]}"; do
+        log_info "尝试下载: ${url}"
+        if wget -q "$url" -O "$tmp" 2>/dev/null || curl -fsSL "$url" -o "$tmp" 2>/dev/null; then
+            mv "$tmp" "$dest"
+            return 0
+        fi
+    done
+
+    rm -f "$tmp"
+    return 1
+}
+
 # ─── 二进制安装 ──────────────────────────────────────────────────────
 
 is_binary_installed() {
@@ -185,11 +213,8 @@ install_binary() {
         cp "$src" "${INSTALL_DIR}/xboard-node"
         log_info "已从本地文件安装: $src"
     else
-        local url="https://github.com/cedar2025/xboard-node/releases/latest/download/xboard-node-linux-${ARCH}"
-        log_info "正在从 GitHub Releases 下载..."
-        if wget -q "$url" -O "${INSTALL_DIR}/xboard-node" 2>/dev/null; then
-            log_info "下载完成"
-        elif curl -fsSL "$url" -o "${INSTALL_DIR}/xboard-node" 2>/dev/null; then
+        log_info "正在从当前仓库 Releases 下载: ${REPO_URL}"
+        if download_release_asset "xboard-node-linux-${ARCH}" "${INSTALL_DIR}/xboard-node"; then
             log_info "下载完成"
         else
             log_error "下载失败。请先将对应架构的二进制放到当前目录后重试。"
@@ -217,7 +242,7 @@ install_systemd_template() {
     cat > "/etc/systemd/system/${SERVICE_TEMPLATE}" << 'UNIT'
 [Unit]
 Description=Xboard Node Backend (node %i)
-Documentation=https://github.com/cedar2025/xboard-node
+Documentation=${REPO_URL}
 After=network.target nss-lookup.target
 
 [Service]
@@ -606,10 +631,10 @@ update_binary() {
 
     detect_arch
 
-    local url="https://github.com/cedar2025/xboard-node/releases/latest/download/xboard-node-linux-${ARCH}"
     local tmp="/tmp/xboard-node-update"
 
-    if wget -q "$url" -O "$tmp" 2>/dev/null || curl -fsSL "$url" -o "$tmp" 2>/dev/null; then
+    log_info "正在从当前仓库 Releases 更新: ${REPO_URL}"
+    if download_release_asset "xboard-node-linux-${ARCH}" "$tmp"; then
         chmod +x "$tmp"
         mv "$tmp" "${INSTALL_DIR}/xboard-node"
         log_info "二进制更新完成"
@@ -731,7 +756,7 @@ print_help() {
       -e apiHost=https://panel.example.com \
       -e apiKey=YOUR_TOKEN \
       -e nodeID=1 \
-      ghcr.io/cedar2025/xboard-node:latest
+      ghcr.io/micah123321/xboard-node:latest
 
 HELP
 }
