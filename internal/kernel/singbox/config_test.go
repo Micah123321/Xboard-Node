@@ -640,8 +640,12 @@ func TestBuildTLSConfig_NoCert(t *testing.T) {
 	nc := &panel.NodeConfig{ServerName: "example.com"}
 	tls := buildTLSConfig(nc, "", "")
 	assertMapValue(t, tls, "enabled", true)
-	// Now we fallback to self-signed certificates when both cert and key are empty
-	assertMapValue(t, tls, "certificate_path", "self-signed")
+	if _, exists := tls["certificate_path"]; exists {
+		t.Fatal("certificate_path should be omitted when no certificate files are available")
+	}
+	if _, exists := tls["key_path"]; exists {
+		t.Fatal("key_path should be omitted when no certificate files are available")
+	}
 }
 
 func TestBuildTLSConfig_FallbackToHost(t *testing.T) {

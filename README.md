@@ -138,6 +138,12 @@ runtime:
 
 完整字段请参考 [config.yml.example](config.yml.example)。
 
+### TLS 证书说明
+
+- 对于 `tuic`、`hysteria`、`anytls` 以及其他显式开启 `TLS=1` 的协议，服务端必须有可用证书文件才能启动。
+- 如果面板和本地配置都没有提供证书，节点会自动在 `{config_dir}/certs` 下生成自签名证书，避免内核因为缺少证书直接启动失败。
+- 生产环境仍建议显式配置可信证书，尤其是在客户端不会关闭证书校验的场景。
+
 ## 重要说明：Shadowsocks 2022 与 UUID
 
 如果节点使用 `2022-blake3-*` 系列 Shadowsocks cipher，请不要继续把用户密码当普通 `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` 这种 UUID 使用。

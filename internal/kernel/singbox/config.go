@@ -694,11 +694,6 @@ func buildTLSConfig(nc *panel.NodeConfig, certFile, keyFile string) M {
 	if certFile != "" && keyFile != "" {
 		tls["certificate_path"] = certFile
 		tls["key_path"] = keyFile
-	} else {
-		// If no real certificates are provided, but TLS is requested,
-		// use a self-signed certificate as fallback to prevent sing-box
-		// from failing with "missing certificate".
-		tls["certificate_path"] = "self-signed"
 	}
 
 	return tls

@@ -9,7 +9,10 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"net"
+	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/cedar2025/xboard-node/internal/cert"
@@ -288,6 +291,10 @@ func (s *Service) initialSetup(ctx context.Context) error {
 	// Update service-level config overrides from remote NodeConfig if present
 	s.applyRemoteOverrides(ctx, nodeConfig)
 
+	if err := s.ensureTLSCertificate(ctx, nodeConfig); err != nil {
+		return fmt.Errorf("ensure tls certificate: %w", err)
+	}
+
 	if err := s.kernel.Start(nodeConfig, users, s.cert.CertFile(), s.cert.KeyFile()); err != nil {
 		return fmt.Errorf("start kernel: %w", err)
 	}
@@ -357,6 +364,125 @@ func (s *Service) applyPanelCert(ctx context.Context, pc *panel.CertConfig) bool
 		slog.Info("cert: paths updated from panel", "cert", s.cert.CertFile(), "key", s.cert.KeyFile())
 	}
 	return changed
+}
+
+// ensureTLSCertificate makes sure TLS-only inbounds have usable certificate
+// files before the kernel starts or reloads.
+func (s *Service) ensureTLSCertificate(ctx context.Context, nc *panel.NodeConfig) error {
+	if !nodeNeedsTLSCertificate(nc) {
+		return nil
+	}
+
+	if certFilesAvailable(s.cert.CertFile(), s.cert.KeyFile()) {
+		return nil
+	}
+
+	if s.cert.CertFile() != "" || s.cert.KeyFile() != "" {
+		return fmt.Errorf("%s requires TLS certificates, but configured files are unavailable (cert=%q key=%q)",
+			nc.Protocol, s.cert.CertFile(), s.cert.KeyFile())
+	}
+
+	newCfg := s.cfg.Cert
+	newCfg.CertMode = "self"
+	if newCfg.Domain == "" {
+		newCfg.Domain = inferCertificateDomain(nc)
+	}
+
+	if _, err := s.cert.Reconfigure(ctx, newCfg); err != nil {
+		return fmt.Errorf("auto-generate self-signed certificate: %w", err)
+	}
+	s.cfg.Cert = newCfg
+
+	if !certFilesAvailable(s.cert.CertFile(), s.cert.KeyFile()) {
+		return fmt.Errorf("%s requires TLS certificates, but self-signed fallback did not produce usable files", nc.Protocol)
+	}
+
+	slog.Info("cert: auto-enabled self-signed certificate for TLS inbound",
+		"protocol", nc.Protocol,
+		"domain", newCfg.Domain,
+		"cert", s.cert.CertFile(),
+	)
+	return nil
+}
+
+// nodeNeedsTLSCertificate reports whether the node protocol requires a server
+// certificate/key pair rather than plaintext or Reality-only settings.
+func nodeNeedsTLSCertificate(nc *panel.NodeConfig) bool {
+	if nc == nil {
+		return false
+	}
+
+	switch nc.Protocol {
+	case "tuic", "hysteria", "anytls":
+		return true
+	case "vmess", "vless", "trojan", "naive", "http":
+		return nc.TLS == 1
+	default:
+		return false
+	}
+}
+
+// inferCertificateDomain picks the best host or IP from panel metadata for
+// self-signed certificate SAN/CommonName generation.
+func inferCertificateDomain(nc *panel.NodeConfig) string {
+	if nc == nil {
+		return "localhost"
+	}
+
+	candidates := []string{
+		nc.ServerName,
+		nc.Host,
+		nc.Domain,
+	}
+	if nc.TLSSettings != nil {
+		if sn, ok := nc.TLSSettings["server_name"].(string); ok {
+			candidates = append(candidates, sn)
+		}
+	}
+	if nc.CertConfig != nil {
+		candidates = append(candidates, nc.CertConfig.Domain)
+	}
+
+	for _, candidate := range candidates {
+		if domain := normalizeCertificateDomain(candidate); domain != "" {
+			return domain
+		}
+	}
+
+	return "localhost"
+}
+
+// normalizeCertificateDomain strips whitespace, ports and IPv6 brackets so
+// certificate generation receives a clean host or IP literal.
+func normalizeCertificateDomain(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		return strings.Trim(host, "[]")
+	}
+
+	if strings.Contains(value, ",") {
+		value = strings.TrimSpace(strings.Split(value, ",")[0])
+	}
+
+	return strings.Trim(value, "[]")
+}
+
+// certFilesAvailable reports whether both cert/key paths are present on disk.
+func certFilesAvailable(certFile, keyFile string) bool {
+	if certFile == "" || keyFile == "" {
+		return false
+	}
+	if _, err := os.Stat(certFile); err != nil {
+		return false
+	}
+	if _, err := os.Stat(keyFile); err != nil {
+		return false
+	}
+	return true
 }
 
 // startWSClient starts the WS client goroutine if a client is configured.
@@ -591,6 +717,11 @@ func (s *Service) updateUserState(users []panel.User) {
 // startKernel starts (or restarts) the kernel with the given config/users and
 // records the successfully applied state. Returns false on error.
 func (s *Service) startKernel(nc *panel.NodeConfig, users []panel.User) bool {
+	if err := s.ensureTLSCertificate(context.Background(), nc); err != nil {
+		slog.Error("failed to prepare TLS certificate", "error", err)
+		return false
+	}
+
 	if err := s.kernel.Start(nc, users, s.cert.CertFile(), s.cert.KeyFile()); err != nil {
 		slog.Error("failed to start kernel", "error", err)
 		return false
@@ -738,6 +869,10 @@ func (s *Service) applyChanges(ctx context.Context, configChanged, usersChanged 
 	// If config changed, delegate to kernel.Reload. The kernel implementation
 	// decides whether to hot-swap users, reconstruct inbounds, or restart itself.
 	if configChanged && s.kernel.IsRunning() {
+		if err := s.ensureTLSCertificate(ctx, s.lastConfig); err != nil {
+			slog.Error("failed to prepare TLS certificate", "error", err)
+			return
+		}
 		if err := s.kernel.Reload(s.lastConfig, s.lastUsers, s.cert.CertFile(), s.cert.KeyFile()); err != nil {
 			slog.Warn("reload failed, falling back to full restart", "error", err)
 			s.startKernel(s.lastConfig, s.lastUsers)

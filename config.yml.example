@@ -31,6 +31,8 @@ kernel:
 #   self  - 生成自签名证书（有效期 10 年，无外部依赖）
 #   file  - 手动指定 cert_file / key_file
 #   none  - 不启用 TLS（默认）
+# 对于 TUIC / Hysteria / AnyTLS 或面板下发 TLS=1 的协议，
+# 如果这里和面板都没有提供证书，节点会自动回退为自签名证书。
 cert:
   cert_mode: "none"
   # ACME 或自签名证书使用的域名
