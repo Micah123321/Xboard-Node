@@ -11,6 +11,7 @@ Xboard 的专用节点后端，完整兼容 Xboard API，支持 sing-box 与 Xra
 - **高效同步**: 优先使用 WebSocket 实时推送，异常时自动回退到 REST 轮询
 - **低运维成本**: 单个 Go 二进制即可运行，便于原生部署与多节点管理
 - **资源可控**: 支持 `runtime.gomemlimit` 与 `runtime.gogc`，适合小内存主机
+- **出口可控**: 支持默认 SOCKS5 出站，并内置一组私网 / BT / 域名黑名单拦截规则
 
 ## 推荐部署方式：本机直接部署
 
@@ -84,6 +85,34 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs
 
 - 当前内置支持 `cloudflare` 和 `alidns`
 - DNS-01 适合被 CDN 代理、无法开放 `80` 端口，或需要通配符证书的场景
+
+### 默认 SOCKS5 出站
+
+如果你希望所有默认出站流量都先走一个上游 SOCKS5，可以在安装时直接传入：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs/heads/dev/install.sh) \
+  -a https://panel.example.com \
+  -t YOUR_TOKEN \
+  -n 1 \
+  --egress-socks5 127.0.0.1:1080
+```
+
+如果 SOCKS5 需要认证：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs/heads/dev/install.sh) \
+  -a https://panel.example.com \
+  -t YOUR_TOKEN \
+  -n 1 \
+  --egress-socks5 127.0.0.1:1080 \
+  --egress-socks5-user your-user \
+  --egress-socks5-pass your-pass
+```
+
+- 这项能力同时支持 `singbox` 和 `xray`
+- 当配置了 `kernel.egress.socks5` 后，普通 TCP/UDP 默认出站会走这个 SOCKS5
+- 如果未配置 SOCKS5，默认出站仍然是直连
 
 ### 常用管理命令
 
@@ -169,6 +198,18 @@ runtime:
 - `gogc` 越低，内存越省，但 CPU 消耗会更高
 - 多节点部署时建议为每个节点单独设置 `config_dir`
 
+如果需要默认经 SOCKS5 出站，可以增加：
+
+```yaml
+kernel:
+  egress:
+    socks5:
+      address: "127.0.0.1"
+      port: 1080
+      # username: "your-user"
+      # password: "your-pass"
+```
+
 完整字段请参考 [config.yml.example](config.yml.example)。
 
 ### TLS 证书说明
@@ -177,6 +218,12 @@ runtime:
 - 对于 `tuic`、`hysteria`、`anytls` 以及其他显式开启 `TLS=1` 的协议，服务端必须有可用证书文件才能启动。
 - 如果面板和本地配置都没有提供证书，节点会自动在 `{config_dir}/certs` 下生成自签名证书，避免内核因为缺少证书直接启动失败。
 - 生产环境仍建议显式配置可信证书，尤其是在客户端不会关闭证书校验的场景。
+
+### 默认拦截规则说明
+
+- 仓库现在默认启用一组内置防滥用规则，会拦截私网访问、BitTorrent 以及一批危险/不希望放行的域名模式。
+- 这套规则会在 `singbox` 和 `xray` 两套生成配置中同时生效。
+- 如果你没有配置 `kernel.egress.socks5`，默认出站仍然是 `direct`；如果配置了，则默认出站会切到这个 SOCKS5。
 
 ## 重要说明：Shadowsocks 2022 与 UUID
 

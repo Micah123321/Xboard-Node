@@ -86,6 +86,12 @@ panel:
 	if cfg.Cert.CertDir != expectedCertDir {
 		t.Errorf("default cert_dir: got %q, want %q", cfg.Cert.CertDir, expectedCertDir)
 	}
+	if !cfg.Kernel.Egress.DefaultRulesEnabled() {
+		t.Error("expected egress.enable_default_rules to default to true")
+	}
+	if !cfg.Kernel.Egress.IPv4Preferred() {
+		t.Error("expected egress.prefer_ipv4 to default to true")
+	}
 }
 
 func TestLoad_MissingURL(t *testing.T) {
@@ -375,5 +381,67 @@ node:
 	}
 	if cfg.Node.PullInterval != 60 {
 		t.Errorf("pull_interval: got %d", cfg.Node.PullInterval)
+	}
+}
+
+func TestLoad_EgressSOCKS5_WithAuth(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+kernel:
+  egress:
+    socks5:
+      address: "127.0.0.1"
+      port: 1080
+      username: "user"
+      password: "pass"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Kernel.Egress.ProxyEnabled() {
+		t.Fatal("expected SOCKS5 proxy to be enabled")
+	}
+	if cfg.Kernel.Egress.DefaultOutboundTag() != DefaultSOCKS5ProxyTag {
+		t.Fatalf("DefaultOutboundTag: got %q, want %q", cfg.Kernel.Egress.DefaultOutboundTag(), DefaultSOCKS5ProxyTag)
+	}
+}
+
+func TestLoad_EgressSOCKS5_MissingPort(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+kernel:
+  egress:
+    socks5:
+      address: "127.0.0.1"
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for socks5 address without port")
+	}
+}
+
+func TestLoad_EgressSOCKS5_PartialAuth(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+kernel:
+  egress:
+    socks5:
+      address: "127.0.0.1"
+      port: 1080
+      username: "user"
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for partial socks5 authentication")
 	}
 }

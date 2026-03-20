@@ -454,6 +454,9 @@ func TestBuildConfig(t *testing.T) {
 	assertMapValue(t, logCfg, "level", "info")
 	assertMapValue(t, logCfg, "timestamp", true)
 
+	dnsCfg := cfg["dns"].(M)
+	assertMapValue(t, dnsCfg, "strategy", "prefer_ipv4")
+
 	outbounds := cfg["outbounds"].([]M)
 	if len(outbounds) != 2 {
 		t.Errorf("outbounds: got %d, want 2", len(outbounds))
@@ -466,6 +469,38 @@ func TestBuildConfig(t *testing.T) {
 		t.Fatalf("inbounds: got %d, want 1", len(inbounds))
 	}
 	assertMapValue(t, inbounds[0], "type", "shadowsocks")
+}
+
+func TestBuildConfig_WithSOCKS5Proxy(t *testing.T) {
+	kcfg := config.KernelConfig{
+		LogLevel: "info",
+	}
+	kcfg.Egress.SOCKS5.Address = "127.0.0.1"
+	kcfg.Egress.SOCKS5.Port = 1080
+
+	nc := &panel.NodeConfig{
+		Protocol:   "shadowsocks",
+		ServerPort: 111,
+		Cipher:     "aes-128-gcm",
+	}
+	cfg := buildConfig(kcfg, nc, testUsers, "", "")
+
+	outbounds := cfg["outbounds"].([]M)
+	foundProxy := false
+	for _, outbound := range outbounds {
+		if outbound["tag"] == config.DefaultSOCKS5ProxyTag {
+			foundProxy = true
+			assertMapValue(t, outbound, "type", "socks")
+			assertMapValue(t, outbound, "server", "127.0.0.1")
+			assertMapValue(t, outbound, "server_port", 1080)
+		}
+	}
+	if !foundProxy {
+		t.Fatal("expected generated SOCKS5 outbound")
+	}
+
+	route := cfg["route"].(M)
+	assertMapValue(t, route, "final", config.DefaultSOCKS5ProxyTag)
 }
 
 func TestBuildConfig_OutboundPriority(t *testing.T) {
@@ -553,15 +588,17 @@ func TestBuildConfig_AllProtocols_ValidJSON(t *testing.T) {
 // --- Routes ---
 
 func TestBuildRoutes_Default(t *testing.T) {
-	route := buildRoutes(nil, nil)
+	route := buildRoutes(config.KernelConfig{}, nil, nil)
 	assertMapValue(t, route, "final", "direct")
 
 	rules := route["rules"].([]M)
-	if len(rules) < 2 {
-		t.Fatalf("expected at least 2 default rules, got %d", len(rules))
+	if len(rules) != 3 {
+		t.Fatalf("expected 3 default rules, got %d", len(rules))
 	}
 	assertMapValue(t, rules[0], "outbound", "block")
+	assertMapValue(t, rules[0], "ip_is_private", true)
 	assertMapValue(t, rules[1], "outbound", "block")
+	assertMapValue(t, rules[2], "outbound", "block")
 }
 
 func TestBuildRoutes_WithCustomRules(t *testing.T) {
@@ -570,20 +607,20 @@ func TestBuildRoutes_WithCustomRules(t *testing.T) {
 		{ID: 2, Match: []string{"10.0.0.0/8"}, Action: "block"},
 		{ID: 3, Match: []string{"allowed.com"}, Action: "direct"},
 	}
-	route := buildRoutes(rules, nil)
+	route := buildRoutes(config.KernelConfig{}, rules, nil)
 	allRules := route["rules"].([]M)
 
-	if len(allRules) != 5 {
-		t.Fatalf("rules count: got %d, want 5", len(allRules))
-	}
-
-	assertMapValue(t, allRules[2], "outbound", "block")
-	if _, ok := allRules[2]["domain_suffix"]; !ok {
-		t.Error("domain rule should use domain_suffix")
+	if len(allRules) != 6 {
+		t.Fatalf("rules count: got %d, want 6", len(allRules))
 	}
 
 	assertMapValue(t, allRules[3], "outbound", "block")
-	if _, ok := allRules[3]["ip_cidr"]; !ok {
+	if _, ok := allRules[3]["domain_suffix"]; !ok {
+		t.Error("domain rule should use domain_suffix")
+	}
+
+	assertMapValue(t, allRules[4], "outbound", "block")
+	if _, ok := allRules[4]["ip_cidr"]; !ok {
 		t.Error("IP rule should use ip_cidr")
 	}
 }
@@ -595,34 +632,34 @@ func TestBuildRoutes_MultiMatch(t *testing.T) {
 		{ID: 1, Match: []string{"*.evil.com", "bad.org", "192.168.1.0/24"}, Action: "block"},
 		{ID: 2, Match: []string{"*.bypass.com"}, Action: "direct"},
 	}
-	route := buildRoutes(rules, nil)
+	route := buildRoutes(config.KernelConfig{}, rules, nil)
 	allRules := route["rules"].([]M)
 
-	// 2 default private-IP rules + 1 domain rule + 1 CIDR rule + 1 domain rule = 5
-	if len(allRules) != 5 {
-		t.Fatalf("rules count: got %d, want 5", len(allRules))
+	// 3 default protection rules + 1 domain rule + 1 CIDR rule + 1 direct rule = 6
+	if len(allRules) != 6 {
+		t.Fatalf("rules count: got %d, want 6", len(allRules))
 	}
 
-	// Rule #2 (index 2): domains from first route (wildcards stripped)
-	domains := allRules[2]["domain_suffix"].([]string)
+	// Rule #3 (index 3): domains from first route (wildcards stripped)
+	domains := allRules[3]["domain_suffix"].([]string)
 	if len(domains) != 2 || domains[0] != "evil.com" || domains[1] != "bad.org" {
 		t.Errorf("domain_suffix: got %v, want [evil.com bad.org]", domains)
 	}
-	assertMapValue(t, allRules[2], "outbound", "block")
+	assertMapValue(t, allRules[3], "outbound", "block")
 
-	// Rule #3 (index 3): CIDRs from first route
-	cidrs := allRules[3]["ip_cidr"].([]string)
+	// Rule #4 (index 4): CIDRs from first route
+	cidrs := allRules[4]["ip_cidr"].([]string)
 	if len(cidrs) != 1 || cidrs[0] != "192.168.1.0/24" {
 		t.Errorf("ip_cidr: got %v, want [192.168.1.0/24]", cidrs)
 	}
-	assertMapValue(t, allRules[3], "outbound", "block")
+	assertMapValue(t, allRules[4], "outbound", "block")
 
-	// Rule #4 (index 4): direct rule (wildcard stripped)
-	directDomains := allRules[4]["domain_suffix"].([]string)
+	// Rule #5 (index 5): direct rule (wildcard stripped)
+	directDomains := allRules[5]["domain_suffix"].([]string)
 	if len(directDomains) != 1 || directDomains[0] != "bypass.com" {
 		t.Errorf("direct domain_suffix: got %v, want [bypass.com]", directDomains)
 	}
-	assertMapValue(t, allRules[4], "outbound", "direct")
+	assertMapValue(t, allRules[5], "outbound", "direct")
 }
 
 // --- TLS Config ---

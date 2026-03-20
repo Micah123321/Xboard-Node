@@ -23,6 +23,17 @@ kernel:
   config_dir: "/etc/xboard-node"
   # 内核日志等级: debug/info/warn/error（默认 warn，可被面板覆盖）
   log_level: "warn"
+  # 默认出口与防滥用规则（可选）
+  # egress:
+  #   # 默认 true：启用仓库内置的私网 / BT / 域名黑名单拦截规则
+  #   enable_default_rules: true
+  #   # 默认 true：按仓库策略优先使用 IPv4 出站
+  #   prefer_ipv4: true
+  #   socks5:
+  #     address: "127.0.0.1"
+  #     port: 1080
+  #     # username: "your-user"
+  #     # password: "your-pass"
 
 # TLS 证书配置（可选，也可交由面板下发）
 # cert_mode: "http" | "dns" | "self" | "file" | "none"

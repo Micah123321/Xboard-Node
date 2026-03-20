@@ -34,7 +34,10 @@ func buildConfig(kcfg config.KernelConfig, nc *panel.NodeConfig, users []panel.U
 
 	// Add default outbounds only if not already defined (Issue #1: Panel priority)
 	if !tags["direct"] {
-		outbounds = append([]M{{"protocol": "freedom", "tag": "direct"}}, outbounds...)
+		outbounds = append([]M{buildDefaultDirectOutbound(kcfg)}, outbounds...)
+	}
+	if kcfg.Egress.ProxyEnabled() && !tags[config.DefaultSOCKS5ProxyTag] {
+		outbounds = append(outbounds, buildDefaultSOCKS5Outbound(kcfg))
 	}
 	if !tags["block"] {
 		// block is often added after direct but before others for safety
@@ -64,6 +67,12 @@ func buildConfig(kcfg config.KernelConfig, nc *panel.NodeConfig, users []panel.U
 		},
 		"outbounds": outbounds,
 	}
+	if kcfg.Egress.IPv4Preferred() {
+		cfg["dns"] = M{
+			"servers":       []string{"1.1.1.1"},
+			"queryStrategy": "UseIPv4",
+		}
+	}
 
 	inbound := buildInbound(nc, users, certFile, keyFile)
 	if inbound != nil {
@@ -75,7 +84,7 @@ func buildConfig(kcfg config.KernelConfig, nc *panel.NodeConfig, users []panel.U
 	}
 
 	// Merge panel routes and static config routes
-	cfg["routing"] = buildRouting(nc.Routes, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute))
+	cfg["routing"] = buildRouting(kcfg, nc.Routes, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute))
 
 	mergeCustomXray(cfg, kcfg)
 	return cfg
@@ -103,6 +112,66 @@ func mergeRouteList(a, b []map[string]any) []map[string]any {
 	res = append(res, a...)
 	res = append(res, b...)
 	return res
+}
+
+func buildDefaultDirectOutbound(kcfg config.KernelConfig) M {
+	outbound := M{
+		"protocol": "freedom",
+		"tag":      "direct",
+	}
+	if kcfg.Egress.IPv4Preferred() {
+		outbound["settings"] = M{
+			"domainStrategy": "UseIPv4v6",
+		}
+	}
+	return outbound
+}
+
+func buildDefaultSOCKS5Outbound(kcfg config.KernelConfig) M {
+	server := M{
+		"address": kcfg.Egress.SOCKS5.Address,
+		"port":    kcfg.Egress.SOCKS5.Port,
+	}
+	if kcfg.Egress.SOCKS5.Username != "" {
+		server["users"] = []M{
+			{
+				"user": kcfg.Egress.SOCKS5.Username,
+				"pass": kcfg.Egress.SOCKS5.Password,
+			},
+		}
+	}
+	return M{
+		"protocol": "socks",
+		"tag":      config.DefaultSOCKS5ProxyTag,
+		"settings": M{
+			"servers": []M{server},
+		},
+	}
+}
+
+func buildDefaultProtectionRules() []M {
+	domainRegexes := kernel.DefaultBlockedDomainRegexes()
+	domains := make([]string, 0, len(domainRegexes))
+	for _, pattern := range domainRegexes {
+		domains = append(domains, "regexp:"+pattern)
+	}
+	return []M{
+		{
+			"type":        "field",
+			"ip":          []string{"geoip:private"},
+			"outboundTag": "block",
+		},
+		{
+			"type":        "field",
+			"domain":      domains,
+			"outboundTag": "block",
+		},
+		{
+			"type":        "field",
+			"protocol":    []string{"bittorrent"},
+			"outboundTag": "block",
+		},
+	}
 }
 
 // mergeCustomXray deep-merges a custom Xray config file into the generated config.
@@ -510,31 +579,37 @@ func buildRealitySettings(nc *panel.NodeConfig) M {
 	return reality
 }
 
-func buildRouting(rules []panel.RouteRule, customRules []map[string]any) M {
+func buildRouting(kcfg config.KernelConfig, rules []panel.RouteRule, customRules []map[string]any) M {
 	var xrayRules []M
 
-	// Custom route rules (from Panel CustomRoutes or local config) have HIGHEST priority
+	if kcfg.Egress.DefaultRulesEnabled() {
+		xrayRules = append(xrayRules, buildDefaultProtectionRules()...)
+	}
+
+	// Custom route rules (from Panel CustomRoutes or local config) have high priority
 	for _, cr := range customRules {
 		xrayRules = append(xrayRules, M(cr))
 	}
 
-	xrayRules = append(xrayRules, M{
-		"type": "field",
-		"ip": []string{
-			"10.0.0.0/8",
-			"100.64.0.0/10",
-			"127.0.0.0/8",
-			"169.254.0.0/16",
-			"172.16.0.0/12",
-			"192.0.0.0/24",
-			"192.168.0.0/16",
-			"198.18.0.0/15",
-			"fc00::/7",
-			"fe80::/10",
-			"::1/128",
-		},
-		"outboundTag": "block",
-	})
+	if !kcfg.Egress.DefaultRulesEnabled() {
+		xrayRules = append(xrayRules, M{
+			"type": "field",
+			"ip": []string{
+				"10.0.0.0/8",
+				"100.64.0.0/10",
+				"127.0.0.0/8",
+				"169.254.0.0/16",
+				"172.16.0.0/12",
+				"192.0.0.0/24",
+				"192.168.0.0/16",
+				"198.18.0.0/15",
+				"fc00::/7",
+				"fe80::/10",
+				"::1/128",
+			},
+			"outboundTag": "block",
+		})
+	}
 
 	for _, rule := range rules {
 		if len(rule.Match) == 0 {
@@ -581,6 +656,12 @@ func buildRouting(rules []panel.RouteRule, customRules []map[string]any) M {
 			})
 		}
 	}
+
+	xrayRules = append(xrayRules, M{
+		"type":        "field",
+		"network":     "tcp,udp",
+		"outboundTag": kcfg.Egress.DefaultOutboundTag(),
+	})
 
 	return M{
 		"domainStrategy": "AsIs",

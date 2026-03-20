@@ -38,7 +38,10 @@ func buildConfig(kcfg config.KernelConfig, nc *panel.NodeConfig, users []panel.U
 
 	// Add default outbounds only if not already defined
 	if !tags["direct"] {
-		outbounds = append([]M{{"type": "direct", "tag": "direct"}}, outbounds...)
+		outbounds = append([]M{buildDefaultDirectOutbound(kcfg)}, outbounds...)
+	}
+	if kcfg.Egress.ProxyEnabled() && !tags[config.DefaultSOCKS5ProxyTag] {
+		outbounds = append(outbounds, buildDefaultSOCKS5Outbound(kcfg))
 	}
 	if !tags["block"] {
 		outbounds = append(outbounds, M{"type": "block", "tag": "block"})
@@ -51,6 +54,9 @@ func buildConfig(kcfg config.KernelConfig, nc *panel.NodeConfig, users []panel.U
 		},
 		"outbounds": outbounds,
 	}
+	if kcfg.Egress.IPv4Preferred() {
+		cfg["dns"] = buildDefaultDNSConfig()
+	}
 
 	inbound := buildInbound(nc, users, certFile, keyFile)
 	if inbound != nil {
@@ -58,7 +64,7 @@ func buildConfig(kcfg config.KernelConfig, nc *panel.NodeConfig, users []panel.U
 	}
 
 	// Merge panel routes and static config routes
-	cfg["route"] = buildRoutes(nc.Routes, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute))
+	cfg["route"] = buildRoutes(kcfg, nc.Routes, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute))
 
 	// Automatically enable rule_set caching (cache_file) when panel routes
 	// reference geoip:/geosite: entries so that the downloaded .srs rule_set
@@ -143,36 +149,100 @@ func mergeRouteList(a, b []map[string]any) []map[string]any {
 	return res
 }
 
-func buildRoutes(panelRoutes []panel.RouteRule, custom []map[string]any) M {
+func buildDefaultDNSConfig() M {
+	return M{
+		"servers": []M{
+			{
+				"tag":     kernel.DefaultDNSResolverTag,
+				"address": "1.1.1.1",
+			},
+		},
+		"strategy": "prefer_ipv4",
+	}
+}
+
+func buildDefaultDirectOutbound(kcfg config.KernelConfig) M {
+	outbound := M{
+		"type": "direct",
+		"tag":  "direct",
+	}
+	if kcfg.Egress.IPv4Preferred() {
+		outbound["domain_resolver"] = M{
+			"server":   kernel.DefaultDNSResolverTag,
+			"strategy": "prefer_ipv4",
+		}
+	}
+	return outbound
+}
+
+func buildDefaultSOCKS5Outbound(kcfg config.KernelConfig) M {
+	outbound := M{
+		"type":        "socks",
+		"tag":         config.DefaultSOCKS5ProxyTag,
+		"server":      kcfg.Egress.SOCKS5.Address,
+		"server_port": kcfg.Egress.SOCKS5.Port,
+		"version":     "5",
+	}
+	if kcfg.Egress.SOCKS5.Username != "" {
+		outbound["username"] = kcfg.Egress.SOCKS5.Username
+		outbound["password"] = kcfg.Egress.SOCKS5.Password
+	}
+	return outbound
+}
+
+func buildDefaultProtectionRules() []M {
+	return []M{
+		{
+			"ip_is_private": true,
+			"outbound":      "block",
+		},
+		{
+			"domain_regex": kernel.DefaultBlockedDomainRegexes(),
+			"outbound":     "block",
+		},
+		{
+			"protocol": []string{"bittorrent"},
+			"outbound": "block",
+		},
+	}
+}
+
+func buildRoutes(kcfg config.KernelConfig, panelRoutes []panel.RouteRule, custom []map[string]any) M {
 	var rules []M
 
-	// Custom Routes (Panel-pushed or Local) go FIRST to have highest priority
+	if kcfg.Egress.DefaultRulesEnabled() {
+		rules = append(rules, buildDefaultProtectionRules()...)
+	}
+
+	// Custom Routes (Panel-pushed or Local) go first after built-in protection rules.
 	for _, cr := range custom {
 		rules = append(rules, M(cr))
 	}
 
-	// Standard blocks for private/loopback
-	rules = append(rules, M{
-		"outbound": "block",
-		"ip_cidr": []string{
-			"10.0.0.0/8",
-			"100.64.0.0/10",
-			"127.0.0.0/8",
-			"169.254.0.0/16",
-			"172.16.0.0/12",
-			"192.0.0.0/24",
-			"192.168.0.0/16",
-			"198.18.0.0/15",
-			"fc00::/7",
-			"fe80::/10",
-			"::1/128",
-		},
-	}, M{
-		"outbound": "block",
-		"domain": []string{
-			"geoip:private",
-		},
-	})
+	if !kcfg.Egress.DefaultRulesEnabled() {
+		// Preserve the historical private-network block when the maintained rule set is disabled.
+		rules = append(rules, M{
+			"outbound": "block",
+			"ip_cidr": []string{
+				"10.0.0.0/8",
+				"100.64.0.0/10",
+				"127.0.0.0/8",
+				"169.254.0.0/16",
+				"172.16.0.0/12",
+				"192.0.0.0/24",
+				"192.168.0.0/16",
+				"198.18.0.0/15",
+				"fc00::/7",
+				"fe80::/10",
+				"::1/128",
+			},
+		}, M{
+			"outbound": "block",
+			"domain": []string{
+				"geoip:private",
+			},
+		})
+	}
 
 	// Panel-defined routes (usually specific blocks/proxies)
 	for _, pr := range panelRoutes {
@@ -240,7 +310,7 @@ func buildRoutes(panelRoutes []panel.RouteRule, custom []map[string]any) M {
 	}
 
 	return M{
-		"final": "direct",
+		"final": kcfg.Egress.DefaultOutboundTag(),
 		"rules": rules,
 	}
 }

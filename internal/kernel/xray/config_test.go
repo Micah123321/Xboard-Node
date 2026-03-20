@@ -67,6 +67,43 @@ func TestBuildConfig_OutboundPriority(t *testing.T) {
 	}
 }
 
+func TestBuildConfig_WithSOCKS5Proxy(t *testing.T) {
+	kcfg := config.KernelConfig{
+		Type:     "xray",
+		LogLevel: "info",
+	}
+	kcfg.Egress.SOCKS5.Address = "127.0.0.1"
+	kcfg.Egress.SOCKS5.Port = 1080
+
+	nc := &panel.NodeConfig{
+		Protocol:   "shadowsocks",
+		ServerPort: 111,
+		Cipher:     "aes-128-gcm",
+	}
+
+	cfg := buildConfig(kcfg, nc, testUsers, "", "")
+	outbounds := cfg["outbounds"].([]M)
+	foundProxy := false
+	for _, outbound := range outbounds {
+		if outbound["tag"] == config.DefaultSOCKS5ProxyTag {
+			foundProxy = true
+			if outbound["protocol"] != "socks" {
+				t.Fatalf("expected socks outbound, got %v", outbound["protocol"])
+			}
+		}
+	}
+	if !foundProxy {
+		t.Fatal("expected generated SOCKS5 outbound")
+	}
+
+	routing := cfg["routing"].(M)
+	rules := routing["rules"].([]M)
+	last := rules[len(rules)-1]
+	if last["outboundTag"] != config.DefaultSOCKS5ProxyTag {
+		t.Fatalf("expected default outbound tag %q, got %v", config.DefaultSOCKS5ProxyTag, last["outboundTag"])
+	}
+}
+
 func TestBuildConfig_AllProtocols_ValidJSON(t *testing.T) {
 	protocols := []struct {
 		name string
@@ -245,19 +282,22 @@ func TestBuildConfig_VLESS_Flow(t *testing.T) {
 }
 
 func TestBuildRouting_Default(t *testing.T) {
-	routing := buildRouting(nil, nil)
+	routing := buildRouting(config.KernelConfig{}, nil, nil)
 	rules := routing["rules"].([]M)
 
-	if len(rules) != 1 {
-		t.Fatalf("expected 1 default rule, got %d", len(rules))
+	if len(rules) != 4 {
+		t.Fatalf("expected 4 default rules, got %d", len(rules))
 	}
 
 	if rules[0]["outboundTag"] != "block" {
 		t.Errorf("expected block outbound, got %v", rules[0]["outboundTag"])
 	}
 	ips := rules[0]["ip"].([]string)
-	if len(ips) < 5 {
-		t.Errorf("expected multiple private CIDRs, got %d", len(ips))
+	if len(ips) != 1 || ips[0] != "geoip:private" {
+		t.Errorf("expected geoip:private block rule, got %v", ips)
+	}
+	if rules[3]["outboundTag"] != "direct" {
+		t.Errorf("expected final direct rule, got %v", rules[3]["outboundTag"])
 	}
 }
 
@@ -275,16 +315,16 @@ func TestBuildRouting_WithRules(t *testing.T) {
 		},
 	}
 
-	routing := buildRouting(rules, nil)
+	routing := buildRouting(config.KernelConfig{}, rules, nil)
 	xrayRules := routing["rules"].([]M)
 
-	// 1 default + 2 domain rules + 1 IP rule = 4
-	if len(xrayRules) != 4 {
-		t.Fatalf("expected 4 rules, got %d", len(xrayRules))
+	// 3 default protection rules + 2 panel rules + 1 panel IP rule + 1 catch-all rule = 7
+	if len(xrayRules) != 7 {
+		t.Fatalf("expected 7 rules, got %d", len(xrayRules))
 	}
 
-	// Rule 1: domains block
-	r1 := xrayRules[1]
+	// Rule 3: domains block
+	r1 := xrayRules[3]
 	domains := r1["domain"].([]string)
 	if len(domains) != 2 {
 		t.Fatalf("expected 2 domains, got %d", len(domains))
@@ -296,17 +336,23 @@ func TestBuildRouting_WithRules(t *testing.T) {
 		t.Errorf("expected block, got %v", r1["outboundTag"])
 	}
 
-	// Rule 2: IP block
-	r2 := xrayRules[2]
+	// Rule 4: IP block
+	r2 := xrayRules[4]
 	ips := r2["ip"].([]string)
 	if len(ips) != 1 || ips[0] != "10.0.0.0/8" {
 		t.Errorf("unexpected IPs: %v", ips)
 	}
 
-	// Rule 3: direct
-	r3 := xrayRules[3]
+	// Rule 5: direct
+	r3 := xrayRules[5]
 	if r3["outboundTag"] != "direct" {
 		t.Errorf("expected direct, got %v", r3["outboundTag"])
+	}
+
+	// Rule 6: catch-all
+	r4 := xrayRules[6]
+	if r4["outboundTag"] != "direct" {
+		t.Errorf("expected final direct catch-all, got %v", r4["outboundTag"])
 	}
 }
 

@@ -8,6 +8,7 @@ set -e
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 1
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 2 -k xray
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 3 --gomemlimit 256MiB --gogc 50
+#   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 3 --egress-socks5 127.0.0.1:1080
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 4 --cert-domain node.example.com
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 5 --cert-mode dns --cert-domain node.example.com --cert-dns-provider cloudflare --cert-dns-env CF_API_TOKEN=xxxx
 #
@@ -49,6 +50,11 @@ NODE_TYPE=""
 KERNEL_TYPE="singbox"
 GOMEMLIMIT=""
 GOGC=""
+EGRESS_SOCKS5=""
+EGRESS_SOCKS5_HOST=""
+EGRESS_SOCKS5_PORT=""
+EGRESS_SOCKS5_USER=""
+EGRESS_SOCKS5_PASS=""
 CERT_MODE=""
 CERT_DOMAIN=""
 CERT_EMAIL=""
@@ -96,6 +102,26 @@ cert_mode_label() {
     esac
 }
 
+parse_socks5_endpoint() {
+    local endpoint="$1"
+    local host=""
+    local port=""
+
+    if [[ "$endpoint" =~ ^\[([^\]]+)\]:([0-9]+)$ ]]; then
+        host="${BASH_REMATCH[1]}"
+        port="${BASH_REMATCH[2]}"
+    elif [[ "$endpoint" =~ ^([^:]+):([0-9]+)$ ]]; then
+        host="${BASH_REMATCH[1]}"
+        port="${BASH_REMATCH[2]}"
+    else
+        return 1
+    fi
+
+    EGRESS_SOCKS5_HOST="$host"
+    EGRESS_SOCKS5_PORT="$port"
+    return 0
+}
+
 # ─── 参数解析 ────────────────────────────────────────────────────────
 
 parse_args() {
@@ -108,6 +134,9 @@ parse_args() {
             -k|--kernel)     KERNEL_TYPE="$2";    shift 2 ;;
             --gomemlimit)    GOMEMLIMIT="$2";     shift 2 ;;
             --gogc)          GOGC="$2";           shift 2 ;;
+            --egress-socks5) EGRESS_SOCKS5="$2";  shift 2 ;;
+            --egress-socks5-user) EGRESS_SOCKS5_USER="$2"; shift 2 ;;
+            --egress-socks5-pass) EGRESS_SOCKS5_PASS="$2"; shift 2 ;;
             --cert-mode)     CERT_MODE="$2";      shift 2 ;;
             --cert-domain)   CERT_DOMAIN="$2";    shift 2 ;;
             --cert-email)    CERT_EMAIL="$2";     shift 2 ;;
@@ -167,6 +196,24 @@ validate_params() {
     fi
     if [ -n "$GOGC" ] && ! [[ "$GOGC" =~ ^[0-9]+$ ]]; then
         log_error "GOGC 必须是非负整数，当前值: $GOGC"
+        exit 1
+    fi
+
+    if [ -n "$EGRESS_SOCKS5" ]; then
+        if ! parse_socks5_endpoint "$EGRESS_SOCKS5"; then
+            log_error "SOCKS5 出站格式无效: ${EGRESS_SOCKS5}，必须是 host:port 或 [ipv6]:port"
+            exit 1
+        fi
+    fi
+
+    if { [ -n "$EGRESS_SOCKS5_USER" ] && [ -z "$EGRESS_SOCKS5_PASS" ]; } || \
+       { [ -z "$EGRESS_SOCKS5_USER" ] && [ -n "$EGRESS_SOCKS5_PASS" ]; }; then
+        log_error "SOCKS5 账号和密码必须同时提供 (--egress-socks5-user / --egress-socks5-pass)"
+        exit 1
+    fi
+
+    if ([ -n "$EGRESS_SOCKS5_USER" ] || [ -n "$EGRESS_SOCKS5_PASS" ]) && [ -z "$EGRESS_SOCKS5" ]; then
+        log_error "配置 SOCKS5 认证时必须同时提供 --egress-socks5 host:port"
         exit 1
     fi
 
@@ -298,6 +345,29 @@ prompt_cert_settings() {
             fi
             ;;
     esac
+}
+
+prompt_egress_settings() {
+    if [ -z "$EGRESS_SOCKS5" ]; then
+        echo ""
+        read -rp "  默认 SOCKS5 出站 (host:port，留空则不设置): " EGRESS_SOCKS5
+    else
+        echo -e "  默认 SOCKS5 出站: ${CYAN}${EGRESS_SOCKS5}${NC}"
+    fi
+
+    if [ -n "$EGRESS_SOCKS5" ]; then
+        if [ -z "$EGRESS_SOCKS5_USER" ]; then
+            read -rp "  SOCKS5 用户名 (可选，留空跳过): " EGRESS_SOCKS5_USER
+        else
+            echo -e "  SOCKS5 用户名: ${CYAN}${EGRESS_SOCKS5_USER}${NC}"
+        fi
+
+        if [ -n "$EGRESS_SOCKS5_USER" ] && [ -z "$EGRESS_SOCKS5_PASS" ]; then
+            read -rp "  SOCKS5 密码: " EGRESS_SOCKS5_PASS
+        elif [ -n "$EGRESS_SOCKS5_PASS" ]; then
+            echo -e "  SOCKS5 密码: ${CYAN}***${NC}"
+        fi
+    fi
 }
 
 # ─── 系统检测 ────────────────────────────────────────────────────────
@@ -531,6 +601,7 @@ prompt_missing_params() {
         echo -e "  GOGC 百分比: ${CYAN}${GOGC}${NC}"
     fi
 
+    prompt_egress_settings
     prompt_cert_settings
 
     echo ""
@@ -543,6 +614,7 @@ write_node_config() {
     local node_id="$1"
     local node_dir="${CONFIG_DIR}/${node_id}"
     local runtime_block=""
+    local egress_block=""
     local cert_block=""
     local cert_mode_resolved=""
     local item=""
@@ -565,6 +637,18 @@ write_node_config() {
         if [ -n "$GOGC" ]; then
             runtime_block="${runtime_block}
   gogc: ${GOGC}"
+        fi
+    fi
+
+    if [ -n "$EGRESS_SOCKS5" ]; then
+        egress_block="  egress:
+    socks5:
+      address: \"${EGRESS_SOCKS5_HOST}\"
+      port: ${EGRESS_SOCKS5_PORT}"
+        if [ -n "$EGRESS_SOCKS5_USER" ]; then
+            egress_block="${egress_block}
+      username: \"${EGRESS_SOCKS5_USER}\"
+      password: \"${EGRESS_SOCKS5_PASS}\""
         fi
     fi
 
@@ -615,6 +699,7 @@ kernel:
   type: "${KERNEL_TYPE}"
   config_dir: "${node_dir}"
   log_level: "warn"
+${egress_block}
 
 ${cert_block}
 
@@ -761,6 +846,15 @@ deploy_node() {
         echo "  运行时内存调优:"
         [ -n "$GOMEMLIMIT" ] && echo "    GOMEMLIMIT: ${GOMEMLIMIT}"
         [ -n "$GOGC" ] && echo "    GOGC:       ${GOGC}"
+    fi
+
+    echo ""
+    if [ -n "$EGRESS_SOCKS5" ]; then
+        echo "  默认出站: SOCKS5"
+        echo "    地址:      ${EGRESS_SOCKS5}"
+        [ -n "$EGRESS_SOCKS5_USER" ] && echo "    用户名:    ${EGRESS_SOCKS5_USER}"
+    else
+        echo "  默认出站: 直连（内置防滥用拦截规则默认开启）"
     fi
 
     echo ""
@@ -950,7 +1044,7 @@ print_help() {
 
   本机部署（默认，推荐，适合减少 Docker 内存占用）:
 
-    install.sh -a <url> -t <token> -n <node_id> [-T <node_type>] [-k singbox|xray] [--gomemlimit 256MiB] [--gogc 50] [--cert-domain node.example.com]
+    install.sh -a <url> -t <token> -n <node_id> [-T <node_type>] [-k singbox|xray] [--gomemlimit 256MiB] [--gogc 50] [--egress-socks5 127.0.0.1:1080] [--cert-domain node.example.com]
 
   Docker 部署:
 
@@ -964,6 +1058,9 @@ print_help() {
     -k, --kernel       内核类型          (singbox 或 xray，默认: singbox)
         --gomemlimit   Go 内存软上限     (例如 256MiB、512MiB)
         --gogc         Go GC 百分比      (例如 50、100)
+        --egress-socks5 默认 SOCKS5 出站 (格式 host:port 或 [ipv6]:port)
+        --egress-socks5-user SOCKS5 用户名
+        --egress-socks5-pass SOCKS5 密码
         --cert-mode    证书模式          (http、dns、self、none)
         --cert-domain  证书域名          (ACME 必填；仅传域名时默认走 HTTP-01)
         --cert-email   ACME 邮箱         (可选，推荐)
@@ -980,14 +1077,17 @@ print_help() {
     # 本机部署节点 2（xray）并限制内存
     bash install.sh -a https://panel.example.com -t mytoken123 -n 2 -k xray --gomemlimit 256MiB --gogc 50
 
-    # 本机部署节点 3，自动申请 ACME HTTP-01 证书
-    bash install.sh -a https://panel.example.com -t mytoken123 -n 3 --cert-domain node.example.com
+    # 本机部署节点 3，所有默认出站经 SOCKS5 转发
+    bash install.sh -a https://panel.example.com -t mytoken123 -n 3 --egress-socks5 127.0.0.1:1080
 
-    # 本机部署节点 4，自动申请 ACME DNS-01 证书（Cloudflare）
-    bash install.sh -a https://panel.example.com -t mytoken123 -n 4 --cert-mode dns --cert-domain node.example.com --cert-dns-provider cloudflare --cert-dns-env CF_API_TOKEN=xxxx
+    # 本机部署节点 4，自动申请 ACME HTTP-01 证书
+    bash install.sh -a https://panel.example.com -t mytoken123 -n 4 --cert-domain node.example.com
 
-    # Docker 部署节点 5
-    bash install.sh -a https://panel.example.com -t mytoken123 -n 5 --docker
+    # 本机部署节点 5，自动申请 ACME DNS-01 证书（Cloudflare）
+    bash install.sh -a https://panel.example.com -t mytoken123 -n 5 --cert-mode dns --cert-domain node.example.com --cert-dns-provider cloudflare --cert-dns-env CF_API_TOKEN=xxxx
+
+    # Docker 部署节点 6
+    bash install.sh -a https://panel.example.com -t mytoken123 -n 6 --docker
 
     # 交互模式
     bash install.sh

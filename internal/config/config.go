@@ -81,9 +81,10 @@ type NodeConfig struct {
 }
 
 type KernelConfig struct {
-	Type      string `yaml:"type"` // "singbox" or "xray"
-	ConfigDir string `yaml:"config_dir"`
-	LogLevel  string `yaml:"log_level"`
+	Type      string       `yaml:"type"` // "singbox" or "xray"
+	ConfigDir string       `yaml:"config_dir"`
+	LogLevel  string       `yaml:"log_level"`
+	Egress    EgressConfig `yaml:"egress"`
 
 	// GeoDataDir is the directory that contains GeoIP/GeoSite database files.
 	// For sing-box: geoip.db and geosite.db (geoip2-format).
@@ -239,6 +240,7 @@ func (c *Config) setDefaults() {
 	if c.Cert.HTTPPort == 0 {
 		c.Cert.HTTPPort = 80
 	}
+	c.Kernel.Egress.setDefaults()
 }
 
 func (c *Config) validate() error {
@@ -263,6 +265,9 @@ func (c *Config) validate() error {
 		return fmt.Errorf("kernel.type must be 'singbox' or 'xray', got '%s'", c.Kernel.Type)
 	}
 	if err := c.Cert.Validate(); err != nil {
+		return err
+	}
+	if err := c.Kernel.Egress.Validate(); err != nil {
 		return err
 	}
 	if c.Node.PushInterval < 0 {
