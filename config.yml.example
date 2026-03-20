@@ -41,12 +41,16 @@ cert:
   # email: "admin@example.com"
 
   # ── HTTP-01 模式 ──
+  # cert_mode: "http"
   # http_port: 80               # ACME 验证监听端口（默认 80）
+  # 需要域名已解析到当前服务器，且 80 端口可被公网访问
 
   # ── DNS-01 模式 ──
+  # cert_mode: "dns"
   # dns_provider: "cloudflare"   # 支持: cloudflare, alidns
   # dns_env:                     # 提供商所需凭据
   #   CF_API_TOKEN: "your-cloudflare-api-token"
+  # 适合被 CDN 代理、80 端口不可用，或需要通配符证书的场景
 
   # ── 文件证书模式 ──
   # cert_file: "/etc/ssl/certs/cert.pem"

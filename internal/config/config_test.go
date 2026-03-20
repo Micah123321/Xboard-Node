@@ -209,6 +209,116 @@ cert:
 	}
 }
 
+func TestLoad_CertModeHTTP_WithDomain(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+cert:
+  cert_mode: "http"
+  domain: "node.example.com"
+  email: "admin@example.com"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Cert.ResolveMode() != "http" {
+		t.Fatalf("ResolveMode: got %q, want %q", cfg.Cert.ResolveMode(), "http")
+	}
+	if cfg.Cert.Domain != "node.example.com" {
+		t.Errorf("domain: got %q", cfg.Cert.Domain)
+	}
+}
+
+func TestLoad_CertModeHTTP_NoDomain(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+cert:
+  cert_mode: "http"
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for cert_mode=http without domain")
+	}
+}
+
+func TestLoad_CertModeDNS_NoProvider(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+cert:
+  cert_mode: "dns"
+  domain: "node.example.com"
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for cert_mode=dns without dns_provider")
+	}
+}
+
+func TestLoad_CertModeDNS_WithProvider(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+cert:
+  cert_mode: "dns"
+  domain: "node.example.com"
+  dns_provider: "cloudflare"
+  dns_env:
+    CF_API_TOKEN: "token"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Cert.ResolveMode() != "dns" {
+		t.Fatalf("ResolveMode: got %q, want %q", cfg.Cert.ResolveMode(), "dns")
+	}
+	if cfg.Cert.DNSProvider != "cloudflare" {
+		t.Errorf("dns_provider: got %q", cfg.Cert.DNSProvider)
+	}
+}
+
+func TestLoad_InvalidCertMode(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+cert:
+  cert_mode: "invalid"
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid cert_mode")
+	}
+}
+
+func TestLoad_FileCertRequiresKey(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+cert:
+  cert_mode: "file"
+  cert_file: "/custom/cert.pem"
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for file cert without key")
+	}
+}
+
 func TestLoad_FileNotFound(t *testing.T) {
 	_, err := Load("/nonexistent/path/config.yaml")
 	if err == nil {

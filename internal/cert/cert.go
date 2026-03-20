@@ -108,23 +108,7 @@ func (m *Manager) Reconfigure(ctx context.Context, newCfg config.CertConfig) (bo
 
 // resolveMode returns the effective cert mode, handling backward compat for auto_tls.
 func (m *Manager) resolveMode() string {
-	mode := strings.ToLower(strings.TrimSpace(m.cfg.CertMode))
-	if mode != "" {
-		return mode
-	}
-	// Backward compat: auto_tls: true → "http"
-	if m.cfg.AutoTLS {
-		return "http"
-	}
-	// Inline PEM content provided → "content"
-	if m.cfg.CertContent != "" && m.cfg.KeyContent != "" {
-		return "content"
-	}
-	// If cert/key file paths are provided → "file"
-	if m.cfg.CertFile != "" && m.cfg.KeyFile != "" {
-		return "file"
-	}
-	return "none"
+	return m.cfg.ResolveMode()
 }
 
 func (m *Manager) CertFile() string  { return m.certFile }

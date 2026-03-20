@@ -8,6 +8,8 @@ set -e
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 1
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 2 -k xray
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 3 --gomemlimit 256MiB --gogc 50
+#   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 4 --cert-domain node.example.com
+#   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 5 --cert-mode dns --cert-domain node.example.com --cert-dns-provider cloudflare --cert-dns-env CF_API_TOKEN=xxxx
 #
 # Docker 部署:
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 3 --docker
@@ -47,6 +49,12 @@ NODE_TYPE=""
 KERNEL_TYPE="singbox"
 GOMEMLIMIT=""
 GOGC=""
+CERT_MODE=""
+CERT_DOMAIN=""
+CERT_EMAIL=""
+CERT_HTTP_PORT=""
+CERT_DNS_PROVIDER=""
+CERT_DNS_ENV_ITEMS=()
 DOCKER_MODE=0
 SUBCOMMAND=""
 
@@ -54,6 +62,39 @@ log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step()  { echo -e "${CYAN}[STEP]${NC} ${BOLD}$1${NC}"; }
+
+has_cert_inputs() {
+    [ -n "$CERT_MODE" ] || [ -n "$CERT_DOMAIN" ] || [ -n "$CERT_EMAIL" ] || \
+    [ -n "$CERT_HTTP_PORT" ] || [ -n "$CERT_DNS_PROVIDER" ] || [ ${#CERT_DNS_ENV_ITEMS[@]} -gt 0 ]
+}
+
+effective_cert_mode() {
+    if [ -n "$CERT_MODE" ]; then
+        printf '%s' "$CERT_MODE"
+        return
+    fi
+    if [ -n "$CERT_DNS_PROVIDER" ] || [ ${#CERT_DNS_ENV_ITEMS[@]} -gt 0 ]; then
+        printf 'dns'
+        return
+    fi
+    if [ -n "$CERT_DOMAIN" ] || [ -n "$CERT_EMAIL" ] || [ -n "$CERT_HTTP_PORT" ]; then
+        printf 'http'
+        return
+    fi
+    printf ''
+}
+
+cert_mode_label() {
+    case "$1" in
+        http) printf 'ACME HTTP-01' ;;
+        dns) printf 'ACME DNS-01' ;;
+        self) printf '自签证书' ;;
+        file) printf '文件证书' ;;
+        content) printf '内联证书' ;;
+        none) printf '不启用固定证书' ;;
+        *) printf '未显式配置' ;;
+    esac
+}
 
 # ─── 参数解析 ────────────────────────────────────────────────────────
 
@@ -67,6 +108,12 @@ parse_args() {
             -k|--kernel)     KERNEL_TYPE="$2";    shift 2 ;;
             --gomemlimit)    GOMEMLIMIT="$2";     shift 2 ;;
             --gogc)          GOGC="$2";           shift 2 ;;
+            --cert-mode)     CERT_MODE="$2";      shift 2 ;;
+            --cert-domain)   CERT_DOMAIN="$2";    shift 2 ;;
+            --cert-email)    CERT_EMAIL="$2";     shift 2 ;;
+            --cert-http-port) CERT_HTTP_PORT="$2"; shift 2 ;;
+            --cert-dns-provider) CERT_DNS_PROVIDER="$2"; shift 2 ;;
+            --cert-dns-env)  CERT_DNS_ENV_ITEMS+=("$2"); shift 2 ;;
             --docker)        DOCKER_MODE=1;         shift ;;
             add|remove|list|update|uninstall|help|--help|-h)
                 if [ -z "$SUBCOMMAND" ]; then
@@ -86,6 +133,14 @@ parse_args() {
     case "$KERNEL_TYPE" in
         xray|Xray|XRAY) KERNEL_TYPE="xray" ;;
         *) KERNEL_TYPE="singbox" ;;
+    esac
+
+    CERT_MODE="$(printf '%s' "$CERT_MODE" | tr '[:upper:]' '[:lower:]')"
+    CERT_DNS_PROVIDER="$(printf '%s' "$CERT_DNS_PROVIDER" | tr '[:upper:]' '[:lower:]')"
+
+    case "$CERT_DNS_PROVIDER" in
+        cf) CERT_DNS_PROVIDER="cloudflare" ;;
+        aliyun) CERT_DNS_PROVIDER="alidns" ;;
     esac
 }
 
@@ -114,6 +169,135 @@ validate_params() {
         log_error "GOGC 必须是非负整数，当前值: $GOGC"
         exit 1
     fi
+
+    local cert_mode_resolved
+    cert_mode_resolved="$(effective_cert_mode)"
+
+    case "$cert_mode_resolved" in
+        ""|none|http|dns|self) ;;
+        *)
+            log_error "不支持的证书模式: ${CERT_MODE}，可选值: http, dns, self, none"
+            exit 1
+            ;;
+    esac
+
+    if [ -n "$CERT_HTTP_PORT" ] && ! [[ "$CERT_HTTP_PORT" =~ ^[1-9][0-9]*$ ]]; then
+        log_error "证书 HTTP 验证端口必须是正整数，当前值: $CERT_HTTP_PORT"
+        exit 1
+    fi
+
+    if [ "$cert_mode_resolved" = "http" ] || [ "$cert_mode_resolved" = "dns" ]; then
+        if [ -z "$CERT_DOMAIN" ]; then
+            log_error "ACME 模式必须提供证书域名 (--cert-domain)"
+            exit 1
+        fi
+    fi
+
+    if [ "$cert_mode_resolved" = "dns" ]; then
+        if [ -z "$CERT_DNS_PROVIDER" ]; then
+            log_error "ACME DNS-01 模式必须提供 DNS Provider (--cert-dns-provider)"
+            exit 1
+        fi
+        if [ ${#CERT_DNS_ENV_ITEMS[@]} -eq 0 ]; then
+            log_error "ACME DNS-01 模式必须至少提供一组 DNS 凭据 (--cert-dns-env KEY=VALUE)"
+            exit 1
+        fi
+    fi
+
+    local item key value
+    for item in "${CERT_DNS_ENV_ITEMS[@]}"; do
+        if [[ "$item" != *=* ]]; then
+            log_error "DNS 凭据格式无效: ${item}，必须是 KEY=VALUE"
+            exit 1
+        fi
+        key="${item%%=*}"
+        value="${item#*=}"
+        if [ -z "$key" ] || [ -z "$value" ]; then
+            log_error "DNS 凭据格式无效: ${item}，KEY 和 VALUE 都不能为空"
+            exit 1
+        fi
+    done
+}
+
+prompt_cert_settings() {
+    local cert_choice=""
+    local cert_mode_resolved=""
+    local dns_choice=""
+    local cf_token=""
+    local ali_key_id=""
+    local ali_key_secret=""
+
+    if ! has_cert_inputs; then
+        echo ""
+        echo "  TLS 证书:"
+        echo "    1) 自动申请 ACME HTTP-01（推荐，需要 80 端口可访问）"
+        echo "    2) 自动申请 ACME DNS-01（适合被 CDN 代理或 80 不可用）"
+        echo "    3) 使用自签证书"
+        echo "    4) 暂不设置（协议需要证书时自动回退自签）"
+        read -rp "  请选择 [1/2/3/4，默认4]: " cert_choice
+        case "$cert_choice" in
+            1) CERT_MODE="http" ;;
+            2) CERT_MODE="dns" ;;
+            3) CERT_MODE="self" ;;
+            *) CERT_MODE="" ;;
+        esac
+    fi
+
+    cert_mode_resolved="$(effective_cert_mode)"
+
+    case "$cert_mode_resolved" in
+        http)
+            if [ -z "$CERT_DOMAIN" ]; then
+                read -rp "  ACME 域名 (例如 node.example.com): " CERT_DOMAIN
+            fi
+            if [ -z "$CERT_EMAIL" ]; then
+                read -rp "  ACME 邮箱 (可选，留空跳过): " CERT_EMAIL
+            fi
+            if [ -z "$CERT_HTTP_PORT" ]; then
+                read -rp "  HTTP-01 验证端口 (默认 80): " CERT_HTTP_PORT
+            fi
+            ;;
+        dns)
+            if [ -z "$CERT_DOMAIN" ]; then
+                read -rp "  ACME 域名 (例如 node.example.com): " CERT_DOMAIN
+            fi
+            if [ -z "$CERT_EMAIL" ]; then
+                read -rp "  ACME 邮箱 (可选，留空跳过): " CERT_EMAIL
+            fi
+            if [ -z "$CERT_DNS_PROVIDER" ]; then
+                echo "  DNS Provider:"
+                echo "    1) cloudflare"
+                echo "    2) alidns"
+                read -rp "  请选择 [1/2]: " dns_choice
+                case "$dns_choice" in
+                    2) CERT_DNS_PROVIDER="alidns" ;;
+                    *) CERT_DNS_PROVIDER="cloudflare" ;;
+                esac
+            fi
+            if [ ${#CERT_DNS_ENV_ITEMS[@]} -eq 0 ]; then
+                case "$CERT_DNS_PROVIDER" in
+                    cloudflare)
+                        read -rp "  Cloudflare API Token: " cf_token
+                        if [ -n "$cf_token" ]; then
+                            CERT_DNS_ENV_ITEMS=("CF_API_TOKEN=${cf_token}")
+                        fi
+                        ;;
+                    alidns)
+                        read -rp "  AliDNS Access Key ID: " ali_key_id
+                        read -rp "  AliDNS Access Key Secret: " ali_key_secret
+                        if [ -n "$ali_key_id" ] && [ -n "$ali_key_secret" ]; then
+                            CERT_DNS_ENV_ITEMS=("ALICLOUD_ACCESS_KEY_ID=${ali_key_id}" "ALICLOUD_ACCESS_KEY_SECRET=${ali_key_secret}")
+                        fi
+                        ;;
+                esac
+            fi
+            ;;
+        self)
+            if [ -z "$CERT_DOMAIN" ]; then
+                read -rp "  自签证书域名/IP (可选，留空将按节点信息自动推断): " CERT_DOMAIN
+            fi
+            ;;
+    esac
 }
 
 # ─── 系统检测 ────────────────────────────────────────────────────────
@@ -347,6 +531,8 @@ prompt_missing_params() {
         echo -e "  GOGC 百分比: ${CYAN}${GOGC}${NC}"
     fi
 
+    prompt_cert_settings
+
     echo ""
     validate_params
 }
@@ -357,6 +543,11 @@ write_node_config() {
     local node_id="$1"
     local node_dir="${CONFIG_DIR}/${node_id}"
     local runtime_block=""
+    local cert_block=""
+    local cert_mode_resolved=""
+    local item=""
+    local key=""
+    local value=""
 
     mkdir -p "$node_dir"
 
@@ -377,6 +568,38 @@ write_node_config() {
         fi
     fi
 
+    cert_mode_resolved="$(effective_cert_mode)"
+    if has_cert_inputs; then
+        cert_block="cert:
+  cert_mode: \"${cert_mode_resolved}\""
+        if [ -n "$CERT_DOMAIN" ]; then
+            cert_block="${cert_block}
+  domain: \"${CERT_DOMAIN}\""
+        fi
+        if [ -n "$CERT_EMAIL" ]; then
+            cert_block="${cert_block}
+  email: \"${CERT_EMAIL}\""
+        fi
+        if [ -n "$CERT_HTTP_PORT" ]; then
+            cert_block="${cert_block}
+  http_port: ${CERT_HTTP_PORT}"
+        fi
+        if [ -n "$CERT_DNS_PROVIDER" ]; then
+            cert_block="${cert_block}
+  dns_provider: \"${CERT_DNS_PROVIDER}\""
+        fi
+        if [ ${#CERT_DNS_ENV_ITEMS[@]} -gt 0 ]; then
+            cert_block="${cert_block}
+  dns_env:"
+            for item in "${CERT_DNS_ENV_ITEMS[@]}"; do
+                key="${item%%=*}"
+                value="${item#*=}"
+                cert_block="${cert_block}
+    ${key}: \"${value}\""
+            done
+        fi
+    fi
+
     cat > "${node_dir}/config.yml" << EOF
 panel:
   url: "${PANEL_URL}"
@@ -392,6 +615,8 @@ kernel:
   type: "${KERNEL_TYPE}"
   config_dir: "${node_dir}"
   log_level: "warn"
+
+${cert_block}
 
 ${runtime_block}
 
@@ -536,6 +761,18 @@ deploy_node() {
         echo "  运行时内存调优:"
         [ -n "$GOMEMLIMIT" ] && echo "    GOMEMLIMIT: ${GOMEMLIMIT}"
         [ -n "$GOGC" ] && echo "    GOGC:       ${GOGC}"
+    fi
+
+    echo ""
+    if has_cert_inputs; then
+        local cert_mode_resolved
+        cert_mode_resolved="$(effective_cert_mode)"
+        echo "  证书策略: $(cert_mode_label "$cert_mode_resolved")"
+        [ -n "$CERT_DOMAIN" ] && echo "    域名:      ${CERT_DOMAIN}"
+        [ -n "$CERT_EMAIL" ] && echo "    邮箱:      ${CERT_EMAIL}"
+        [ -n "$CERT_DNS_PROVIDER" ] && echo "    Provider:  ${CERT_DNS_PROVIDER}"
+    else
+        echo "  证书策略: 未显式配置；若协议需要 TLS，将自动回退为自签证书"
     fi
 
     echo ""
@@ -713,7 +950,7 @@ print_help() {
 
   本机部署（默认，推荐，适合减少 Docker 内存占用）:
 
-    install.sh -a <url> -t <token> -n <node_id> [-T <node_type>] [-k singbox|xray] [--gomemlimit 256MiB] [--gogc 50]
+    install.sh -a <url> -t <token> -n <node_id> [-T <node_type>] [-k singbox|xray] [--gomemlimit 256MiB] [--gogc 50] [--cert-domain node.example.com]
 
   Docker 部署:
 
@@ -727,6 +964,12 @@ print_help() {
     -k, --kernel       内核类型          (singbox 或 xray，默认: singbox)
         --gomemlimit   Go 内存软上限     (例如 256MiB、512MiB)
         --gogc         Go GC 百分比      (例如 50、100)
+        --cert-mode    证书模式          (http、dns、self、none)
+        --cert-domain  证书域名          (ACME 必填；仅传域名时默认走 HTTP-01)
+        --cert-email   ACME 邮箱         (可选，推荐)
+        --cert-http-port HTTP-01 端口    (默认 80)
+        --cert-dns-provider DNS Provider (cloudflare 或 alidns)
+        --cert-dns-env DNS 凭据          (可重复传入，格式 KEY=VALUE)
         --docker       使用 Docker 部署  (默认不开启)
 
   示例:
@@ -737,8 +980,14 @@ print_help() {
     # 本机部署节点 2（xray）并限制内存
     bash install.sh -a https://panel.example.com -t mytoken123 -n 2 -k xray --gomemlimit 256MiB --gogc 50
 
-    # Docker 部署节点 3
-    bash install.sh -a https://panel.example.com -t mytoken123 -n 3 --docker
+    # 本机部署节点 3，自动申请 ACME HTTP-01 证书
+    bash install.sh -a https://panel.example.com -t mytoken123 -n 3 --cert-domain node.example.com
+
+    # 本机部署节点 4，自动申请 ACME DNS-01 证书（Cloudflare）
+    bash install.sh -a https://panel.example.com -t mytoken123 -n 4 --cert-mode dns --cert-domain node.example.com --cert-dns-provider cloudflare --cert-dns-env CF_API_TOKEN=xxxx
+
+    # Docker 部署节点 5
+    bash install.sh -a https://panel.example.com -t mytoken123 -n 5 --docker
 
     # 交互模式
     bash install.sh

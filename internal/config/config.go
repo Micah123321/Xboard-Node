@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -261,8 +262,8 @@ func (c *Config) validate() error {
 	default:
 		return fmt.Errorf("kernel.type must be 'singbox' or 'xray', got '%s'", c.Kernel.Type)
 	}
-	if c.Cert.AutoTLS && c.Cert.Domain == "" {
-		return fmt.Errorf("cert.domain is required when cert.auto_tls is enabled")
+	if err := c.Cert.Validate(); err != nil {
+		return err
 	}
 	if c.Node.PushInterval < 0 {
 		return fmt.Errorf("node.push_interval must not be negative")
@@ -271,6 +272,66 @@ func (c *Config) validate() error {
 		return fmt.Errorf("node.pull_interval must not be negative")
 	}
 	return nil
+}
+
+// ResolveMode returns the effective certificate mode after applying backward
+// compatibility rules such as auto_tls implying HTTP-01 ACME.
+func (c CertConfig) ResolveMode() string {
+	mode := strings.ToLower(strings.TrimSpace(c.CertMode))
+	if mode != "" {
+		return mode
+	}
+	if c.AutoTLS {
+		return "http"
+	}
+	if c.CertContent != "" && c.KeyContent != "" {
+		return "content"
+	}
+	if c.CertFile != "" && c.KeyFile != "" {
+		return "file"
+	}
+	return "none"
+}
+
+// Validate checks that the selected certificate mode has the required inputs.
+func (c CertConfig) Validate() error {
+	if c.HTTPPort < 0 {
+		return fmt.Errorf("cert.http_port must not be negative")
+	}
+
+	mode := c.ResolveMode()
+	switch mode {
+	case "", "none", "self":
+		return nil
+	case "http":
+		if c.Domain == "" {
+			return fmt.Errorf("cert.domain is required when cert_mode is http")
+		}
+		return nil
+	case "dns":
+		if c.Domain == "" {
+			return fmt.Errorf("cert.domain is required when cert_mode is dns")
+		}
+		if c.DNSProvider == "" {
+			return fmt.Errorf("cert.dns_provider is required when cert_mode is dns")
+		}
+		if len(c.DNSEnv) == 0 {
+			return fmt.Errorf("cert.dns_env is required when cert_mode is dns")
+		}
+		return nil
+	case "file":
+		if c.CertFile == "" || c.KeyFile == "" {
+			return fmt.Errorf("cert.cert_file and cert.key_file are required when cert_mode is file")
+		}
+		return nil
+	case "content":
+		if c.CertContent == "" || c.KeyContent == "" {
+			return fmt.Errorf("cert.cert_content and cert.key_content are required when cert_mode is content")
+		}
+		return nil
+	default:
+		return fmt.Errorf("cert.cert_mode must be one of http, dns, self, file, content, none, got %q", c.CertMode)
+	}
 }
 
 // ExpandNodes returns one *Config per node to run.

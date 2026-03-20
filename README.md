@@ -52,6 +52,39 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs
 - `--gomemlimit 256MiB`: 设置 Go 运行时软内存上限，超过后 GC 会更积极
 - `--gogc 50`: 将 GC 目标百分比调低，进一步降低峰值内存，但会增加少量 CPU 开销
 
+### 一键申请 ACME 证书
+
+如果你的节点协议需要 TLS，安装脚本现在可以直接写入证书配置。
+
+使用 ACME HTTP-01：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs/heads/dev/install.sh) \
+  -a https://panel.example.com \
+  -t YOUR_TOKEN \
+  -n 1 \
+  --cert-domain node.example.com
+```
+
+- 仅传 `--cert-domain` 时，安装脚本会默认写入 `cert_mode: "http"`
+- 你需要保证域名已经解析到当前服务器，且公网可以访问 `80` 端口
+
+使用 ACME DNS-01：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs/heads/dev/install.sh) \
+  -a https://panel.example.com \
+  -t YOUR_TOKEN \
+  -n 1 \
+  --cert-mode dns \
+  --cert-domain node.example.com \
+  --cert-dns-provider cloudflare \
+  --cert-dns-env CF_API_TOKEN=YOUR_TOKEN
+```
+
+- 当前内置支持 `cloudflare` 和 `alidns`
+- DNS-01 适合被 CDN 代理、无法开放 `80` 端口，或需要通配符证书的场景
+
 ### 常用管理命令
 
 ```bash
@@ -140,6 +173,7 @@ runtime:
 
 ### TLS 证书说明
 
+- 本地配置和安装脚本都支持 `cert_mode: "http"` / `cert_mode: "dns"` 来自动申请 ACME 证书。
 - 对于 `tuic`、`hysteria`、`anytls` 以及其他显式开启 `TLS=1` 的协议，服务端必须有可用证书文件才能启动。
 - 如果面板和本地配置都没有提供证书，节点会自动在 `{config_dir}/certs` 下生成自签名证书，避免内核因为缺少证书直接启动失败。
 - 生产环境仍建议显式配置可信证书，尤其是在客户端不会关闭证书校验的场景。
