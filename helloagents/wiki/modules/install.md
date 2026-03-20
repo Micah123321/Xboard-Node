@@ -24,8 +24,13 @@
 - 支持在安装阶段写入 `runtime.gomemlimit`
 - 支持在安装阶段写入 `runtime.gogc`
 
+#### 场景: Shadowsocks 2022 密钥格式
+节点使用 `2022-blake3-*` 系列 Shadowsocks cipher。
+- 用户密码必须是标准 base64 编码后的 16/32 字节密钥，不能直接使用 UUID
+- 如面板仍使用 UUID 用户体系，应改回传统 Shadowsocks cipher
+
 #### 场景: 当前仓库自动发布与安装
-当前仓库 `Micah123321/Xboard-Node` 推送到 `dev` 分支后需要自动产出可安装版本。
+当前仓库 `Micah123321/Xboard-Node` 推送到 `dev` 分支，或手动触发 workflow 后，需要自动产出可安装版本。
 - GitHub Actions 自动更新当前仓库的 Release 资产
 - `install.sh` 与 `update` 默认从当前仓库下载最新二进制
 - Docker 默认拉取 `ghcr.io/micah123321/xboard-node:latest`
@@ -33,3 +38,5 @@
 ## 变更历史
 - [202603200133_docs_cn_native_deploy](../../history/2026-03/202603200133_docs_cn_native_deploy/) - 补充中文文档、原生部署说明与内存调优参数
 - 2026-03-20: 统一当前仓库的 Action、Release 和安装脚本来源，安装与更新默认跟随 `Micah123321/Xboard-Node`
+
+

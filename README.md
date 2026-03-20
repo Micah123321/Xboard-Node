@@ -138,6 +138,19 @@ runtime:
 
 完整字段请参考 [config.yml.example](config.yml.example)。
 
+## 重要说明：Shadowsocks 2022 与 UUID
+
+如果节点使用 `2022-blake3-*` 系列 Shadowsocks cipher，请不要继续把用户密码当普通 `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` 这种 UUID 使用。
+
+- `2022-blake3-aes-128-gcm` 要求标准 base64 编码后的 16 字节密钥
+- `2022-blake3-aes-256-gcm` 与 `2022-blake3-chacha20-poly1305` 要求标准 base64 编码后的 32 字节密钥
+- 如果面板仍下发 UUID，节点可能在启动阶段报 `invalid shadowsocks 2022 user password`，或在客户端连接阶段出现 `message authentication failed`
+
+推荐做法:
+
+- 如果你的用户体系就是 UUID，请将节点 cipher 改回传统 Shadowsocks，例如 `aes-128-gcm`、`aes-256-gcm`、`chacha20-ietf-poly1305`
+- 如果你必须使用 `2022-blake3-*`，请确保服务端 `server_key` 和每个用户密码都使用标准 base64 密钥，而不是 UUID
+
 ## License
 
 MPL-2.0
