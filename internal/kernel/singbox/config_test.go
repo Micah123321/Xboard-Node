@@ -601,6 +601,34 @@ func TestBuildRoutes_Default(t *testing.T) {
 	assertMapValue(t, rules[2], "outbound", "block")
 }
 
+func TestMergeCustomSingboxRoute_AppendsAfterDefaultProtection(t *testing.T) {
+	cfg := M{
+		"route": M{
+			"rules": []M{
+				{"outbound": "block", "ip_is_private": true},
+				{"outbound": "block", "protocol": []string{"bittorrent"}},
+			},
+		},
+	}
+
+	mergeCustomSingboxRoute(cfg, map[string]any{
+		"rules": []map[string]any{
+			{"outbound": "direct", "domain_suffix": []string{"example.com"}},
+		},
+	})
+
+	rules := cfg["route"].(M)["rules"].([]M)
+	if len(rules) != 3 {
+		t.Fatalf("rules: got %d, want 3", len(rules))
+	}
+	if rules[0]["ip_is_private"] != true {
+		t.Fatalf("expected default protection rule to stay first, got %#v", rules[0])
+	}
+	if rules[2]["outbound"] != "direct" {
+		t.Fatalf("expected custom rule appended last, got %#v", rules[2])
+	}
+}
+
 func TestBuildRoutes_WithCustomRules(t *testing.T) {
 	rules := []panel.RouteRule{
 		{ID: 1, Match: []string{"blocked.com"}, Action: "block"},

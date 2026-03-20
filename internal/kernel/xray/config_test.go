@@ -301,6 +301,34 @@ func TestBuildRouting_Default(t *testing.T) {
 	}
 }
 
+func TestMergeCustomXrayRouting_AppendsAfterDefaultProtection(t *testing.T) {
+	cfg := M{
+		"routing": M{
+			"rules": []M{
+				{"type": "field", "ip": []string{"geoip:private"}, "outboundTag": "block"},
+				{"type": "field", "protocol": []string{"bittorrent"}, "outboundTag": "block"},
+			},
+		},
+	}
+
+	mergeCustomXrayRouting(cfg, map[string]any{
+		"rules": []map[string]any{
+			{"type": "field", "domain": []string{"domain:example.com"}, "outboundTag": "direct"},
+		},
+	})
+
+	rules := cfg["routing"].(M)["rules"].([]M)
+	if len(rules) != 3 {
+		t.Fatalf("rules: got %d, want 3", len(rules))
+	}
+	if rules[0]["outboundTag"] != "block" {
+		t.Fatalf("expected default protection rule to stay first, got %#v", rules[0])
+	}
+	if rules[2]["outboundTag"] != "direct" {
+		t.Fatalf("expected custom rule appended last, got %#v", rules[2])
+	}
+}
+
 func TestBuildRouting_WithRules(t *testing.T) {
 	rules := []panel.RouteRule{
 		{

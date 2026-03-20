@@ -112,7 +112,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs
 
 - 这项能力同时支持 `singbox` 和 `xray`
 - 当配置了 `kernel.egress.socks5` 后，普通 TCP/UDP 默认出站会走这个 SOCKS5
-- 如果未配置 SOCKS5，默认出站仍然是直连
+- 如果未配置 SOCKS5，默认出站仍然是直连，但默认拦截规则依然会照常生效
+- 安装脚本生成的 `config.yml` 会默认写出 `kernel.egress.enable_default_rules: true` 和 `kernel.egress.prefer_ipv4: true`，你可以直接在本地改这两个开关
 
 ### 常用管理命令
 
@@ -203,6 +204,8 @@ runtime:
 ```yaml
 kernel:
   egress:
+    enable_default_rules: true
+    prefer_ipv4: true
     socks5:
       address: "127.0.0.1"
       port: 1080
@@ -223,6 +226,8 @@ kernel:
 
 - 仓库现在默认启用一组内置防滥用规则，会拦截私网访问、BitTorrent 以及一批危险/不希望放行的域名模式。
 - 这套规则会在 `singbox` 和 `xray` 两套生成配置中同时生效。
+- 即使你没有配置 `kernel.egress.socks5`，这套默认拦截规则也仍然会优先生效。
+- 如果你要调整它，可以直接修改 `kernel.egress.enable_default_rules` 和 `kernel.egress.prefer_ipv4`，或者继续补充自己的 `custom_route` / `custom_config` 规则。
 - 如果你没有配置 `kernel.egress.socks5`，默认出站仍然是 `direct`；如果配置了，则默认出站会切到这个 SOCKS5。
 
 ## 重要说明：Shadowsocks 2022 与 UUID

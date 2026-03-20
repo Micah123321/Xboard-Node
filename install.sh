@@ -640,8 +640,12 @@ write_node_config() {
         fi
     fi
 
+    egress_block="  egress:
+    enable_default_rules: true
+    prefer_ipv4: true"
+
     if [ -n "$EGRESS_SOCKS5" ]; then
-        egress_block="  egress:
+        egress_block="${egress_block}
     socks5:
       address: \"${EGRESS_SOCKS5_HOST}\"
       port: ${EGRESS_SOCKS5_PORT}"

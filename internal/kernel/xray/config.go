@@ -230,10 +230,10 @@ func mergeCustomXrayRouting(cfg M, customRouting map[string]any) {
 		cfg["routing"] = routing
 	}
 
-	// rules — custom rules prepended (so they match before panel rules)
+	// rules – append after generated rules so built-in protection remains first
 	if v, ok := customRouting["rules"]; ok {
 		if existing, ok := routing["rules"].([]M); ok {
-			routing["rules"] = kernel.MergePrependList(existing, v)
+			routing["rules"] = kernel.MergeAppendList(existing, v)
 		}
 	}
 

@@ -368,10 +368,10 @@ func mergeCustomSingboxRoute(cfg M, customRoute map[string]any) {
 		cfg["route"] = route
 	}
 
-	// rules — custom rules prepended (so they match before panel rules)
+	// rules – append after generated rules so built-in protection remains first
 	if v, ok := customRoute["rules"]; ok {
 		if existing, ok := route["rules"].([]M); ok {
-			route["rules"] = kernel.MergePrependList(existing, v)
+			route["rules"] = kernel.MergeAppendList(existing, v)
 		}
 	}
 
