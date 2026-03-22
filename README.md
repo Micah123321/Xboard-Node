@@ -83,6 +83,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs
   --cert-dns-env CF_API_TOKEN=YOUR_TOKEN
 ```
 
+- 部署完成后，安装脚本会额外输出“证书申请状态”：检测到 `/etc/xboard-node/<node_id>/certs/<domain>.crt/.key` 即表示申请成功；否则会提示你查看服务日志继续排查。
 - 当前内置支持 `cloudflare` 和 `alidns`
 - DNS-01 适合被 CDN 代理、无法开放 `80` 端口，或需要通配符证书的场景
 

@@ -102,6 +102,59 @@ cert_mode_label() {
     esac
 }
 
+is_acme_mode() {
+    case "$(effective_cert_mode)" in
+        http|dns) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+cert_file_path() {
+    local node_id="$1"
+    printf '%s/%s/certs/%s.crt' "$CONFIG_DIR" "$node_id" "$CERT_DOMAIN"
+}
+
+cert_key_path() {
+    local node_id="$1"
+    printf '%s/%s/certs/%s.key' "$CONFIG_DIR" "$node_id" "$CERT_DOMAIN"
+}
+
+print_cert_status_hint() {
+    local node_id="$1"
+    local cert_file=""
+    local key_file=""
+
+    if ! is_acme_mode || [ -z "$CERT_DOMAIN" ]; then
+        return 0
+    fi
+
+    cert_file="$(cert_file_path "$node_id")"
+    key_file="$(cert_key_path "$node_id")"
+
+    echo "  证书申请状态:"
+    if [ -f "$cert_file" ] && [ -f "$key_file" ]; then
+        echo "    结果:      已成功写入证书文件"
+        echo "    cert:      ${cert_file}"
+        echo "    key:       ${key_file}"
+        return 0
+    fi
+
+    echo "    结果:      暂未检测到证书文件"
+    if [ "$DOCKER_MODE" -eq 1 ]; then
+        echo "    说明:      容器启动后会自动申请，首次签发可能需要几十秒"
+        echo "    排查日志:  docker logs -f xboard-node-${node_id}"
+    else
+        if command -v systemctl >/dev/null 2>&1 && systemctl is-active "xboard-node@${node_id}" >/dev/null 2>&1; then
+            echo "    说明:      服务已启动，可能仍在申请或同步证书"
+        else
+            echo "    说明:      服务未正常进入 active，证书申请大概率失败"
+            echo "    服务状态:  systemctl status xboard-node@${node_id}"
+        fi
+        echo "    排查日志:  journalctl -u xboard-node@${node_id} -n 50 --no-pager"
+    fi
+    echo "    常见原因:  域名未解析到本机、80 端口不可达、DNS Provider 凭据错误"
+}
+
 parse_socks5_endpoint() {
     local endpoint="$1"
     local host=""
@@ -869,8 +922,14 @@ deploy_node() {
         [ -n "$CERT_DOMAIN" ] && echo "    域名:      ${CERT_DOMAIN}"
         [ -n "$CERT_EMAIL" ] && echo "    邮箱:      ${CERT_EMAIL}"
         [ -n "$CERT_DNS_PROVIDER" ] && echo "    Provider:  ${CERT_DNS_PROVIDER}"
+        is_acme_mode && echo "    首次申请:  服务启动后自动触发"
     else
         echo "  证书策略: 未显式配置；若协议需要 TLS，将自动回退为自签证书"
+    fi
+
+    if has_cert_inputs && is_acme_mode; then
+        echo ""
+        print_cert_status_hint "$NODE_ID"
     fi
 
     echo ""
