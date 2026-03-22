@@ -41,6 +41,7 @@ RELEASE_REPO_LC="$(printf '%s' "$RELEASE_REPO" | tr '[:upper:]' '[:lower:]')"
 REPO_URL="https://github.com/${RELEASE_REPO}"
 RELEASES_BASE_URL="${REPO_URL}/releases"
 DOCKER_IMAGE="ghcr.io/${RELEASE_REPO_LC}:latest"
+CERT_WAIT_SECONDS=15
 
 # 解析后的参数
 PANEL_URL=""
@@ -63,6 +64,7 @@ CERT_DNS_PROVIDER=""
 CERT_DNS_ENV_ITEMS=()
 DOCKER_MODE=0
 SUBCOMMAND=""
+NODE_LAUNCHED=0
 
 log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
@@ -117,6 +119,55 @@ cert_file_path() {
 cert_key_path() {
     local node_id="$1"
     printf '%s/%s/certs/%s.key' "$CONFIG_DIR" "$node_id" "$CERT_DOMAIN"
+}
+
+can_auto_wait_for_cert() {
+    if ! is_acme_mode || [ -z "$CERT_DOMAIN" ]; then
+        return 1
+    fi
+
+    if [ "$NODE_LAUNCHED" -ne 1 ]; then
+        return 1
+    fi
+
+    if [ "$DOCKER_MODE" -eq 1 ]; then
+        command -v docker >/dev/null 2>&1
+        return
+    fi
+
+    command -v systemctl >/dev/null 2>&1
+}
+
+wait_for_cert_result() {
+    local node_id="$1"
+    local timeout="${2:-$CERT_WAIT_SECONDS}"
+    local cert_file=""
+    local key_file=""
+    local waited=0
+
+    if ! can_auto_wait_for_cert; then
+        return 1
+    fi
+
+    cert_file="$(cert_file_path "$node_id")"
+    key_file="$(cert_key_path "$node_id")"
+
+    if [ -f "$cert_file" ] && [ -f "$key_file" ]; then
+        return 0
+    fi
+
+    log_info "正在等待证书申请结果（最多 ${timeout} 秒）..."
+    while [ "$waited" -lt "$timeout" ]; do
+        sleep 1
+        waited=$((waited + 1))
+        if [ -f "$cert_file" ] && [ -f "$key_file" ]; then
+            log_info "已检测到证书文件，ACME 申请成功"
+            return 0
+        fi
+    done
+
+    log_warn "${timeout} 秒内未检测到证书文件，将输出当前状态和排查命令"
+    return 1
 }
 
 print_cert_status_hint() {
@@ -785,6 +836,7 @@ add_node_native() {
         install_systemd_template
         systemctl enable "xboard-node@${node_id}"
         systemctl start "xboard-node@${node_id}"
+        NODE_LAUNCHED=1
         log_info "服务已启动: xboard-node@${node_id}"
     else
         log_warn "未检测到 systemd，请手动运行:"
@@ -817,6 +869,7 @@ add_node_docker() {
         fi
         cd "${CONFIG_DIR}"
         ${COMPOSE_CMD} up -d "node-${node_id}"
+        NODE_LAUNCHED=1
         log_info "容器已启动: xboard-node-${node_id}"
     else
         log_warn "未检测到 Docker，请先安装后再执行:"
@@ -879,6 +932,10 @@ deploy_node() {
         add_node_docker "$NODE_ID"
     else
         add_node_native "$NODE_ID"
+    fi
+
+    if has_cert_inputs && is_acme_mode; then
+        wait_for_cert_result "$NODE_ID" "$CERT_WAIT_SECONDS" || true
     fi
 
     echo ""
