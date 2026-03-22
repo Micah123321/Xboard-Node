@@ -7,11 +7,19 @@ Xboard 的专用节点后端，完整兼容 Xboard API，支持 sing-box 与 Xra
 ## 功能特性
 
 - **双内核支持**: `sing-box`（默认）和 `xray`
-- **协议覆盖完整**: 支持 V2Ray、Trojan、Shadowsocks、Hysteria2、TUIC、Naive 等常见协议
+- **协议清单明确**: 公共协议与各内核专属协议都已在下方列出，便于直接对照面板配置
 - **高效同步**: 优先使用 WebSocket 实时推送，异常时自动回退到 REST 轮询
 - **低运维成本**: 单个 Go 二进制即可运行，便于原生部署与多节点管理
 - **资源可控**: 支持 `runtime.gomemlimit` 与 `runtime.gogc`，适合小内存主机
 - **出口可控**: 支持默认 SOCKS5 出站，并内置一组私网 / BT / 域名黑名单拦截规则
+
+### 当前支持的协议
+
+- `sing-box`（默认）: `vmess`、`vless`、`trojan`、`shadowsocks`、`hysteria`（Version=2 时生成 `hysteria2`）、`tuic`、`naive`、`socks`、`http`、`anytls`、`mieru`
+- `xray`: `vmess`、`vless`、`trojan`、`shadowsocks`、`socks`、`http`、`dokodemo-door`
+- 两套内核共同支持: `vmess`、`vless`、`trojan`、`shadowsocks`、`socks`、`http`
+- `sing-box` 专属: `hysteria` / `hysteria2`、`tuic`、`naive`、`anytls`、`mieru`
+- `xray` 专属: `dokodemo-door`
 
 ## 推荐部署方式：本机直接部署
 
@@ -219,7 +227,7 @@ kernel:
 ### TLS 证书说明
 
 - 本地配置和安装脚本都支持 `cert_mode: "http"` / `cert_mode: "dns"` 来自动申请 ACME 证书。
-- 对于 `tuic`、`hysteria`、`anytls` 以及其他显式开启 `TLS=1` 的协议，服务端必须有可用证书文件才能启动。
+- 对于 `tuic`、`hysteria`（Version=2 时对应 `hysteria2`）、`anytls` 以及其他显式开启 `TLS=1` 的协议，服务端必须有可用证书文件才能启动。
 - 如果面板和本地配置都没有提供证书，节点会自动在 `{config_dir}/certs` 下生成自签名证书，避免内核因为缺少证书直接启动失败。
 - 生产环境仍建议显式配置可信证书，尤其是在客户端不会关闭证书校验的场景。
 
