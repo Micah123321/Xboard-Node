@@ -34,6 +34,15 @@ kernel:
   #     port: 1080
   #     # username: "your-user"
   #     # password: "your-pass"
+  #   # socks5 和 shadowsocks 只能二选一
+  #   shadowsocks:
+  #     address: "cu1.utieol.com"
+  #     port: 50552
+  #     method: "2022-blake3-aes-256-gcm"
+  #     password: "<server_key>:<user_key>"
+  #     # 传统 SS 示例：
+  #     # method: "aes-128-gcm"
+  #     # password: "your-password"
 
 # TLS 证书配置（可选，也可交由面板下发）
 # cert_mode: "http" | "dns" | "self" | "file" | "none"

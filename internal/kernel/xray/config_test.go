@@ -104,6 +104,90 @@ func TestBuildConfig_WithSOCKS5Proxy(t *testing.T) {
 	}
 }
 
+func TestBuildConfig_WithShadowsocksProxy(t *testing.T) {
+	kcfg := config.KernelConfig{
+		Type:     "xray",
+		LogLevel: "info",
+	}
+	kcfg.Egress.Shadowsocks.Address = "127.0.0.1"
+	kcfg.Egress.Shadowsocks.Port = 8388
+	kcfg.Egress.Shadowsocks.Method = "aes-128-gcm"
+	kcfg.Egress.Shadowsocks.Password = "test-password"
+
+	nc := &panel.NodeConfig{
+		Protocol:   "shadowsocks",
+		ServerPort: 111,
+		Cipher:     "aes-128-gcm",
+	}
+
+	cfg := buildConfig(kcfg, nc, testUsers, "", "")
+	outbounds := cfg["outbounds"].([]M)
+	foundProxy := false
+	for _, outbound := range outbounds {
+		if outbound["tag"] == config.DefaultShadowsocksProxyTag {
+			foundProxy = true
+			if outbound["protocol"] != "shadowsocks" {
+				t.Fatalf("expected shadowsocks outbound, got %v", outbound["protocol"])
+			}
+			settings := outbound["settings"].(M)
+			servers := settings["servers"].([]M)
+			if len(servers) != 1 {
+				t.Fatalf("expected 1 server, got %d", len(servers))
+			}
+			if servers[0]["method"] != "aes-128-gcm" {
+				t.Fatalf("expected aes-128-gcm, got %v", servers[0]["method"])
+			}
+			if servers[0]["password"] != "test-password" {
+				t.Fatalf("expected test-password, got %v", servers[0]["password"])
+			}
+		}
+	}
+	if !foundProxy {
+		t.Fatal("expected generated Shadowsocks outbound")
+	}
+
+	routing := cfg["routing"].(M)
+	rules := routing["rules"].([]M)
+	last := rules[len(rules)-1]
+	if last["outboundTag"] != config.DefaultShadowsocksProxyTag {
+		t.Fatalf("expected default outbound tag %q, got %v", config.DefaultShadowsocksProxyTag, last["outboundTag"])
+	}
+}
+
+func TestBuildConfig_WithShadowsocks2022Proxy(t *testing.T) {
+	kcfg := config.KernelConfig{
+		Type:     "xray",
+		LogLevel: "info",
+	}
+	kcfg.Egress.Shadowsocks.Address = "cu1.utieol.com"
+	kcfg.Egress.Shadowsocks.Port = 50552
+	kcfg.Egress.Shadowsocks.Method = "2022-blake3-aes-256-gcm"
+	kcfg.Egress.Shadowsocks.Password = "ZWNhZDc0OGIyMmRmYjlmNjliMzM1OTFmMDUwMmY5ZWU=:MDJiODI4NjctYTcwNS00ZTZkLWFjNzEtMDQ1ZjU0ZDY="
+
+	nc := &panel.NodeConfig{
+		Protocol:   "shadowsocks",
+		ServerPort: 111,
+		Cipher:     "aes-128-gcm",
+	}
+
+	cfg := buildConfig(kcfg, nc, testUsers, "", "")
+	outbounds := cfg["outbounds"].([]M)
+	for _, outbound := range outbounds {
+		if outbound["tag"] == config.DefaultShadowsocksProxyTag {
+			settings := outbound["settings"].(M)
+			servers := settings["servers"].([]M)
+			if servers[0]["method"] != "2022-blake3-aes-256-gcm" {
+				t.Fatalf("expected 2022-blake3-aes-256-gcm, got %v", servers[0]["method"])
+			}
+			if servers[0]["password"] != "ZWNhZDc0OGIyMmRmYjlmNjliMzM1OTFmMDUwMmY5ZWU=:MDJiODI4NjctYTcwNS00ZTZkLWFjNzEtMDQ1ZjU0ZDY=" {
+				t.Fatalf("unexpected ss2022 password: %v", servers[0]["password"])
+			}
+			return
+		}
+	}
+	t.Fatal("expected generated Shadowsocks 2022 outbound")
+}
+
 func TestBuildConfig_AllProtocols_ValidJSON(t *testing.T) {
 	protocols := []struct {
 		name string

@@ -410,6 +410,55 @@ kernel:
 	}
 }
 
+func TestLoad_EgressShadowsocks_Traditional(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+kernel:
+  egress:
+    shadowsocks:
+      address: "127.0.0.1"
+      port: 8388
+      method: "aes-128-gcm"
+      password: "test-password"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Kernel.Egress.ShadowsocksEnabled() {
+		t.Fatal("expected Shadowsocks proxy to be enabled")
+	}
+	if cfg.Kernel.Egress.DefaultOutboundTag() != DefaultShadowsocksProxyTag {
+		t.Fatalf("DefaultOutboundTag: got %q, want %q", cfg.Kernel.Egress.DefaultOutboundTag(), DefaultShadowsocksProxyTag)
+	}
+}
+
+func TestLoad_EgressShadowsocks_2022(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+kernel:
+  egress:
+    shadowsocks:
+      address: "cu1.utieol.com"
+      port: 50552
+      method: "2022-blake3-aes-256-gcm"
+      password: "ZWNhZDc0OGIyMmRmYjlmNjliMzM1OTFmMDUwMmY5ZWU=:MDJiODI4NjctYTcwNS00ZTZkLWFjNzEtMDQ1ZjU0ZDY="
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Kernel.Egress.ShadowsocksEnabled() {
+		t.Fatal("expected Shadowsocks proxy to be enabled")
+	}
+}
+
 func TestLoad_EgressSOCKS5_MissingPort(t *testing.T) {
 	path := writeTemp(t, `
 panel:
@@ -443,5 +492,67 @@ kernel:
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for partial socks5 authentication")
+	}
+}
+
+func TestLoad_EgressShadowsocks_MissingMethod(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+kernel:
+  egress:
+    shadowsocks:
+      address: "127.0.0.1"
+      port: 8388
+      password: "test-password"
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for shadowsocks config without method")
+	}
+}
+
+func TestLoad_EgressShadowsocks_Invalid2022Password(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+kernel:
+  egress:
+    shadowsocks:
+      address: "127.0.0.1"
+      port: 8388
+      method: "2022-blake3-aes-128-gcm"
+      password: "not-base64"
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid shadowsocks 2022 password")
+	}
+}
+
+func TestLoad_Egress_Conflict(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+kernel:
+  egress:
+    socks5:
+      address: "127.0.0.1"
+      port: 1080
+    shadowsocks:
+      address: "127.0.0.1"
+      port: 8388
+      method: "aes-128-gcm"
+      password: "test-password"
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for mutually exclusive egress upstreams")
 	}
 }

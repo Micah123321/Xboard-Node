@@ -40,8 +40,11 @@ func buildConfig(kcfg config.KernelConfig, nc *panel.NodeConfig, users []panel.U
 	if !tags["direct"] {
 		outbounds = append([]M{buildDefaultDirectOutbound(kcfg)}, outbounds...)
 	}
-	if kcfg.Egress.ProxyEnabled() && !tags[config.DefaultSOCKS5ProxyTag] {
+	if kcfg.Egress.SOCKS5Enabled() && !tags[config.DefaultSOCKS5ProxyTag] {
 		outbounds = append(outbounds, buildDefaultSOCKS5Outbound(kcfg))
+	}
+	if kcfg.Egress.ShadowsocksEnabled() && !tags[config.DefaultShadowsocksProxyTag] {
+		outbounds = append(outbounds, buildDefaultShadowsocksOutbound(kcfg))
 	}
 	if !tags["block"] {
 		outbounds = append(outbounds, M{"type": "block", "tag": "block"})
@@ -188,6 +191,17 @@ func buildDefaultSOCKS5Outbound(kcfg config.KernelConfig) M {
 		outbound["password"] = kcfg.Egress.SOCKS5.Password
 	}
 	return outbound
+}
+
+func buildDefaultShadowsocksOutbound(kcfg config.KernelConfig) M {
+	return M{
+		"type":        "shadowsocks",
+		"tag":         config.DefaultShadowsocksProxyTag,
+		"server":      kcfg.Egress.Shadowsocks.Address,
+		"server_port": kcfg.Egress.Shadowsocks.Port,
+		"method":      kcfg.Egress.Shadowsocks.Method,
+		"password":    kcfg.Egress.Shadowsocks.Password,
+	}
 }
 
 func buildDefaultProtectionRules() []M {

@@ -121,6 +121,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs
 
 - 这项能力同时支持 `singbox` 和 `xray`
 - 当配置了 `kernel.egress.socks5` 后，普通 TCP/UDP 默认出站会走这个 SOCKS5
+- 如果你更需要接入 `ss` / `ss2022` 落地节点，也可以改用 `kernel.egress.shadowsocks`；默认路由行为与 `socks5` 保持一致，但两者只能二选一
 - 如果未配置 SOCKS5，默认出站仍然是直连，但默认拦截规则依然会照常生效
 - 安装脚本生成的 `config.yml` 会默认写出 `kernel.egress.enable_default_rules: true` 和 `kernel.egress.prefer_ipv4: true`，你可以直接在本地改这两个开关
 
@@ -220,6 +221,14 @@ kernel:
       port: 1080
       # username: "your-user"
       # password: "your-pass"
+    # shadowsocks:
+    #   address: "cu1.utieol.com"
+    #   port: 50552
+    #   method: "2022-blake3-aes-256-gcm"
+    #   password: "<server_key>:<user_key>"
+    #   # 传统 SS 示例：
+    #   # method: "aes-128-gcm"
+    #   # password: "your-password"
 ```
 
 完整字段请参考 [config.yml.example](config.yml.example)。
@@ -235,9 +244,9 @@ kernel:
 
 - 仓库现在默认启用一组内置防滥用规则，会拦截私网访问、BitTorrent 以及一批危险/不希望放行的域名模式。
 - 这套规则会在 `singbox` 和 `xray` 两套生成配置中同时生效。
-- 即使你没有配置 `kernel.egress.socks5`，这套默认拦截规则也仍然会优先生效。
+- 即使你没有配置 `kernel.egress.socks5` 或 `kernel.egress.shadowsocks`，这套默认拦截规则也仍然会优先生效。
 - 如果你要调整它，可以直接修改 `kernel.egress.enable_default_rules` 和 `kernel.egress.prefer_ipv4`，或者继续补充自己的 `custom_route` / `custom_config` 规则。
-- 如果你没有配置 `kernel.egress.socks5`，默认出站仍然是 `direct`；如果配置了，则默认出站会切到这个 SOCKS5。
+- 如果你没有配置任何默认上游出站，默认出站仍然是 `direct`；如果配置了 `kernel.egress.socks5` 或 `kernel.egress.shadowsocks`，默认出站会切到对应的上游。
 
 ## 重要说明：Shadowsocks 2022 与 UUID
 
@@ -251,6 +260,7 @@ kernel:
 
 - 如果你的用户体系就是 UUID，请将节点 cipher 改回传统 Shadowsocks，例如 `aes-128-gcm`、`aes-256-gcm`、`chacha20-ietf-poly1305`
 - 如果你必须使用 `2022-blake3-*`，请确保服务端 `server_key` 和每个用户密码都使用标准 base64 密钥，而不是 UUID
+- 如果你把它配置在 `kernel.egress.shadowsocks` 里，单用户可以直接填一个标准 base64 key；多用户或中转场景可以填 `<server_key>:<user_key>`
 
 ## License
 

@@ -503,6 +503,69 @@ func TestBuildConfig_WithSOCKS5Proxy(t *testing.T) {
 	assertMapValue(t, route, "final", config.DefaultSOCKS5ProxyTag)
 }
 
+func TestBuildConfig_WithShadowsocksProxy(t *testing.T) {
+	kcfg := config.KernelConfig{
+		LogLevel: "info",
+	}
+	kcfg.Egress.Shadowsocks.Address = "127.0.0.1"
+	kcfg.Egress.Shadowsocks.Port = 8388
+	kcfg.Egress.Shadowsocks.Method = "aes-128-gcm"
+	kcfg.Egress.Shadowsocks.Password = "test-password"
+
+	nc := &panel.NodeConfig{
+		Protocol:   "shadowsocks",
+		ServerPort: 111,
+		Cipher:     "aes-128-gcm",
+	}
+	cfg := buildConfig(kcfg, nc, testUsers, "", "")
+
+	outbounds := cfg["outbounds"].([]M)
+	foundProxy := false
+	for _, outbound := range outbounds {
+		if outbound["tag"] == config.DefaultShadowsocksProxyTag {
+			foundProxy = true
+			assertMapValue(t, outbound, "type", "shadowsocks")
+			assertMapValue(t, outbound, "server", "127.0.0.1")
+			assertMapValue(t, outbound, "server_port", 8388)
+			assertMapValue(t, outbound, "method", "aes-128-gcm")
+			assertMapValue(t, outbound, "password", "test-password")
+		}
+	}
+	if !foundProxy {
+		t.Fatal("expected generated Shadowsocks outbound")
+	}
+
+	route := cfg["route"].(M)
+	assertMapValue(t, route, "final", config.DefaultShadowsocksProxyTag)
+}
+
+func TestBuildConfig_WithShadowsocks2022Proxy(t *testing.T) {
+	kcfg := config.KernelConfig{
+		LogLevel: "info",
+	}
+	kcfg.Egress.Shadowsocks.Address = "cu1.utieol.com"
+	kcfg.Egress.Shadowsocks.Port = 50552
+	kcfg.Egress.Shadowsocks.Method = "2022-blake3-aes-256-gcm"
+	kcfg.Egress.Shadowsocks.Password = "ZWNhZDc0OGIyMmRmYjlmNjliMzM1OTFmMDUwMmY5ZWU=:MDJiODI4NjctYTcwNS00ZTZkLWFjNzEtMDQ1ZjU0ZDY="
+
+	nc := &panel.NodeConfig{
+		Protocol:   "shadowsocks",
+		ServerPort: 111,
+		Cipher:     "aes-128-gcm",
+	}
+	cfg := buildConfig(kcfg, nc, testUsers, "", "")
+
+	outbounds := cfg["outbounds"].([]M)
+	for _, outbound := range outbounds {
+		if outbound["tag"] == config.DefaultShadowsocksProxyTag {
+			assertMapValue(t, outbound, "method", "2022-blake3-aes-256-gcm")
+			assertMapValue(t, outbound, "password", "ZWNhZDc0OGIyMmRmYjlmNjliMzM1OTFmMDUwMmY5ZWU=:MDJiODI4NjctYTcwNS00ZTZkLWFjNzEtMDQ1ZjU0ZDY=")
+			return
+		}
+	}
+	t.Fatal("expected generated Shadowsocks 2022 outbound")
+}
+
 func TestBuildConfig_OutboundPriority(t *testing.T) {
 	kcfg := config.KernelConfig{
 		LogLevel: "info",
