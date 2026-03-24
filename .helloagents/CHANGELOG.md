@@ -4,6 +4,10 @@
 
 ### 快速修复
 
+- **[install]**: `install.sh` 在 `singbox + --egress-shadowsocks-uri` 场景下新增启动后默认出站健康检查；若日志出现 `shadowsocks egress probe failed`，部署会直接判失败、输出排查命令，并保留节点配置与服务现场。 — by yinjianm
+  - 类型: 快速修复（安装阶段 SS 默认出站失败收口）
+  - 文件: install.sh, README.md
+
 - **[config/install]**: kernel.egress.shadowsocks 改为仅接受 ss://... URI 输入，配置加载阶段会完成传统 SS / SS2022 URI 解析、method 白名单校验和 SS2022 密钥校验；install.sh 同步切换为 --egress-shadowsocks-uri，README 与 config.yml.example 全部改用 URI 示例。
   - 类型: 快速修复（URI-only 出站输入收敛）
   - 文件: internal/config/egress.go, internal/config/config_test.go, install.sh, README.md, config.yml.example

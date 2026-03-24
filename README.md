@@ -136,7 +136,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs
   -a https://panel.example.com \
   -t YOUR_TOKEN \
   -n 1 \
-  --egress-shadowsocks-uri 'ss://MjAyMi1ibGFrZTMtYWVzLTI1Ni1nY206ODhvMGZwK3BBV29XS3ZrRGUydWhxek4zcDE3Uk5mQzdhSE0wVldJTUtuZz06UnlObkhsZ3lLT3ZKVzRCWVY5TnhWMDlMWkhnWGM1Ui9wamxKSjRPR3QyND0=@38.182.122.32:37605?type=tcp#egress'
+  --egress-shadowsocks-uri 'ss://MjAyMi1ibGFrZTMtYWVzLTI1Ni1nY206ODhvMasdads9XS3ZrRGUydWhxek4zcDE3Uk5mQzdhSE0wVldJTUtuZz06UnlObkhsZ3lLT3ZKVzRCWVY5TnhWMDlMWkhnWGM1Ui9wamxKSjRPR3QyND0=@12.23.34.56:37605?type=tcp#egress'
 ```
 
 - 这项能力同时支持 `singbox` 和 `xray`
@@ -145,6 +145,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs
 - `install.sh` 现在使用单个 `--egress-shadowsocks-uri 'ss://...'` 参数写入默认 SS 出站
 - `kernel.egress.shadowsocks` 现在只接受 `uri`；旧的 `address / port / method / password` 写法会在加载配置时直接报错
 - `aes-192-gcm` 仅建议在 `singbox` 内核下使用；当前安装脚本会拦截 `xray + aes-192-gcm` 组合，避免写入后启动失败
+- 当你使用 `singbox + --egress-shadowsocks-uri` 时，安装脚本会在服务启动后等待默认出站真实 probe；如果日志明确出现 `shadowsocks egress probe failed`，部署会直接判失败并保留现场供排查
 - 如果未配置 SOCKS5，默认出站仍然是直连，但默认拦截规则依然会照常生效
 - 安装脚本生成的 `config.yml` 会默认写出 `kernel.egress.enable_default_rules: true` 和 `kernel.egress.prefer_ipv4: true`，你可以直接在本地改这两个开关
 
@@ -267,7 +268,7 @@ kernel:
       # username: "your-user"
       # password: "your-pass"
     # shadowsocks:
-    #   uri: "ss://MjAyMi1ibGFrZTMtYWVzLTI1Ni1nY206ODhvMGZwK3BBV29XS3ZrRGUydWhxek4zcDE3Uk5mQzdhSE0wVldJTUtuZz06UnlObkhsZ3lLT3ZKVzRCWVY5TnhWMDlMWkhnWGM1Ui9wamxKSjRPR3QyND0=@38.182.122.32:37605?type=tcp#egress"
+    #   uri: "ss://MjAyMi1ibGFrZTMtYWVzLTI1Ni1nY206ODhvMasdads9XS3ZrRGUydWhxek4zcDE3Uk5mQzdhSE0wVldJTUtuZz06UnlObkhsZ3lLT3ZKVzRCWVY5TnhWMDlMWkhnWGM1Ui9wamxKSjRPR3QyND0=@12.23.34.56:37605?type=tcp#egress"
     #   # 传统 SS 示例：
     #   # uri: "ss://YWVzLTEyOC1nY206eW91ci1wYXNzd29yZA==@127.0.0.1:8388"
 ```

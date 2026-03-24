@@ -43,6 +43,7 @@ REPO_URL="https://github.com/${RELEASE_REPO}"
 RELEASES_BASE_URL="${REPO_URL}/releases"
 DOCKER_IMAGE="ghcr.io/${RELEASE_REPO_LC}:latest"
 CERT_WAIT_SECONDS=15
+EGRESS_PROBE_WAIT_SECONDS=15
 
 # 解析后的参数
 PANEL_URL=""
@@ -58,6 +59,8 @@ EGRESS_SOCKS5_PORT=""
 EGRESS_SOCKS5_USER=""
 EGRESS_SOCKS5_PASS=""
 EGRESS_SHADOWSOCKS_URI=""
+EGRESS_SHADOWSOCKS_HOST=""
+EGRESS_SHADOWSOCKS_PORT=""
 CERT_MODE=""
 CERT_DOMAIN=""
 CERT_EMAIL=""
@@ -67,6 +70,8 @@ CERT_DNS_ENV_ITEMS=()
 DOCKER_MODE=0
 SUBCOMMAND=""
 NODE_LAUNCHED=0
+SERVICE_LAUNCH_TIME_LOCAL=""
+SERVICE_LAUNCH_TIME_UTC=""
 
 log_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
@@ -138,6 +143,126 @@ can_auto_wait_for_cert() {
     fi
 
     command -v systemctl >/dev/null 2>&1
+}
+
+capture_launch_time() {
+    SERVICE_LAUNCH_TIME_LOCAL="$(date '+%Y-%m-%d %H:%M:%S')"
+    SERVICE_LAUNCH_TIME_UTC="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+}
+
+native_node_service_name() {
+    local node_id="$1"
+    printf 'xboard-node@%s' "$node_id"
+}
+
+docker_node_container_name() {
+    local node_id="$1"
+    printf 'xboard-node-%s' "$node_id"
+}
+
+can_auto_wait_for_shadowsocks_probe() {
+    if [ -z "$EGRESS_SHADOWSOCKS_URI" ] || [ "$KERNEL_TYPE" != "singbox" ]; then
+        return 1
+    fi
+
+    if [ "$NODE_LAUNCHED" -ne 1 ]; then
+        return 1
+    fi
+
+    if [ "$DOCKER_MODE" -eq 1 ]; then
+        command -v docker >/dev/null 2>&1
+        return
+    fi
+
+    command -v journalctl >/dev/null 2>&1
+}
+
+read_node_logs_since_launch() {
+    local node_id="$1"
+
+    if [ "$DOCKER_MODE" -eq 1 ]; then
+        if [ -n "$SERVICE_LAUNCH_TIME_UTC" ]; then
+            docker logs --since "$SERVICE_LAUNCH_TIME_UTC" "$(docker_node_container_name "$node_id")" 2>&1
+            return
+        fi
+        docker logs "$(docker_node_container_name "$node_id")" 2>&1
+        return
+    fi
+
+    if [ -n "$SERVICE_LAUNCH_TIME_LOCAL" ]; then
+        journalctl -u "$(native_node_service_name "$node_id")" --since "$SERVICE_LAUNCH_TIME_LOCAL" -n 200 --no-pager 2>/dev/null
+        return
+    fi
+    journalctl -u "$(native_node_service_name "$node_id")" -n 200 --no-pager 2>/dev/null
+}
+
+latest_shadowsocks_probe_result() {
+    local node_id="$1"
+    local latest_line=""
+
+    latest_line="$(
+        read_node_logs_since_launch "$node_id" | \
+        grep -E 'shadowsocks egress probe (succeeded|failed)' | \
+        tail -n 1 || true
+    )"
+
+    case "$latest_line" in
+        *"shadowsocks egress probe succeeded"*)
+            printf 'success'
+            ;;
+        *"shadowsocks egress probe failed"*)
+            printf 'failed'
+            ;;
+        *)
+            printf 'pending'
+            ;;
+    esac
+}
+
+wait_for_shadowsocks_probe_result() {
+    local node_id="$1"
+    local timeout="${2:-$EGRESS_PROBE_WAIT_SECONDS}"
+    local waited=0
+    local probe_result=""
+
+    if ! can_auto_wait_for_shadowsocks_probe; then
+        return 2
+    fi
+
+    log_info "正在等待 Shadowsocks 默认出站健康检查结果（最多 ${timeout} 秒）..."
+    while [ "$waited" -lt "$timeout" ]; do
+        probe_result="$(latest_shadowsocks_probe_result "$node_id")"
+        case "$probe_result" in
+            success)
+                log_info "Shadowsocks 默认出站健康检查通过"
+                return 0
+                ;;
+            failed)
+                log_error "Shadowsocks 默认出站健康检查失败"
+                return 1
+                ;;
+        esac
+
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    log_warn "${timeout} 秒内未拿到 Shadowsocks 默认出站 probe 结果"
+    return 2
+}
+
+print_shadowsocks_probe_hint() {
+    local node_id="$1"
+
+    echo "  默认出站健康检查:"
+    if [ "$DOCKER_MODE" -eq 1 ]; then
+        echo "    容器状态:  docker ps -a --filter name=$(docker_node_container_name "$node_id")"
+        echo "    排查日志:  docker logs --tail 50 $(docker_node_container_name "$node_id")"
+    else
+        echo "    服务状态:  systemctl status $(native_node_service_name "$node_id")"
+        echo "    排查日志:  journalctl -u $(native_node_service_name "$node_id") -n 50 --no-pager"
+    fi
+    echo "    关键字:    shadowsocks egress probe, open connection to"
 }
 
 wait_for_cert_result() {
@@ -922,6 +1047,7 @@ add_node_native() {
 
     if command -v systemctl >/dev/null 2>&1; then
         install_systemd_template
+        capture_launch_time
         systemctl enable "xboard-node@${node_id}"
         systemctl start "xboard-node@${node_id}"
         NODE_LAUNCHED=1
@@ -956,6 +1082,7 @@ add_node_docker() {
             return
         fi
         cd "${CONFIG_DIR}"
+        capture_launch_time
         ${COMPOSE_CMD} up -d "node-${node_id}"
         NODE_LAUNCHED=1
         log_info "容器已启动: xboard-node-${node_id}"
@@ -1009,6 +1136,8 @@ EOF
 # ─── 部署入口 ────────────────────────────────────────────────────────
 
 deploy_node() {
+    local egress_probe_status="skipped"
+
     if has_all_params; then
         validate_params
         log_info "开始部署节点 ${NODE_ID} (${KERNEL_TYPE}) → ${PANEL_URL}"
@@ -1024,6 +1153,34 @@ deploy_node() {
 
     if has_cert_inputs && is_acme_mode; then
         wait_for_cert_result "$NODE_ID" "$CERT_WAIT_SECONDS" || true
+    fi
+
+    if [ -n "$EGRESS_SHADOWSOCKS_URI" ]; then
+        if [ "$KERNEL_TYPE" = "singbox" ]; then
+            if wait_for_shadowsocks_probe_result "$NODE_ID" "$EGRESS_PROBE_WAIT_SECONDS"; then
+                egress_probe_status="passed"
+            else
+                local probe_rc=$?
+                if [ "$probe_rc" -eq 1 ]; then
+                    echo ""
+                    echo -e "${RED}=== 节点 ${NODE_ID} 部署失败 ===${NC}"
+                    echo ""
+                    echo "  失败原因: Shadowsocks 默认出站健康检查失败"
+                    echo "    内核:      ${KERNEL_TYPE}"
+                    echo "    URI:       ${EGRESS_SHADOWSOCKS_URI}"
+                    echo "    说明:      节点配置和服务已保留，便于继续排查"
+                    echo ""
+                    print_shadowsocks_probe_hint "$NODE_ID"
+                    echo ""
+                    echo "  配置文件: ${CONFIG_DIR}/${NODE_ID}/config.yml"
+                    echo ""
+                    return 1
+                fi
+                egress_probe_status="timeout"
+            fi
+        else
+            egress_probe_status="unsupported"
+        fi
     fi
 
     echo ""
@@ -1058,6 +1215,21 @@ deploy_node() {
     elif [ -n "$EGRESS_SHADOWSOCKS_URI" ]; then
         echo "  默认出站: Shadowsocks"
         echo "    URI:       ${EGRESS_SHADOWSOCKS_URI}"
+        case "$egress_probe_status" in
+            passed)
+                echo "    健康检查:  已通过（默认出站 probe succeeded）"
+                ;;
+            timeout)
+                echo "    健康检查:  超时未确认，请手动查看 probe 日志"
+                print_shadowsocks_probe_hint "$NODE_ID"
+                ;;
+            unsupported)
+                echo "    健康检查:  当前仅 singbox 支持真实 probe，已跳过"
+                ;;
+            *)
+                echo "    健康检查:  未执行"
+                ;;
+        esac
     else
         echo "  默认出站: 直连（内置防滥用拦截规则默认开启）"
     fi
