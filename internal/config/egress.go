@@ -3,7 +3,11 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
+	"net/url"
+	"strconv"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 const DefaultSOCKS5ProxyTag = "default-socks5"
@@ -46,11 +50,50 @@ type SOCKS5EgressConfig struct {
 }
 
 // ShadowsocksEgressConfig describes a default upstream Shadowsocks proxy.
+// Operators configure it with a single ss:// URI; the derived fields are kept
+// for kernel config generation and in-memory status reporting.
 type ShadowsocksEgressConfig struct {
-	Address  string `yaml:"address"`
-	Port     int    `yaml:"port"`
-	Method   string `yaml:"method"`
-	Password string `yaml:"password"`
+	URI string `yaml:"uri,omitempty"`
+
+	Address  string `yaml:"-"`
+	Port     int    `yaml:"-"`
+	Method   string `yaml:"-"`
+	Password string `yaml:"-"`
+}
+
+func (c *ShadowsocksEgressConfig) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == 0 || value.Tag == "!!null" {
+		return nil
+	}
+	if value.Kind != yaml.MappingNode {
+		return fmt.Errorf("egress.shadowsocks must be a mapping")
+	}
+
+	type shadowsocksYAML struct {
+		URI string `yaml:"uri"`
+	}
+	var raw shadowsocksYAML
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+
+	for i := 0; i < len(value.Content); i += 2 {
+		key := value.Content[i].Value
+		switch key {
+		case "uri":
+		case "address", "port", "method", "password":
+			return fmt.Errorf("egress.shadowsocks.%s is no longer supported; use egress.shadowsocks.uri instead", key)
+		default:
+			return fmt.Errorf("unsupported egress.shadowsocks field %q", key)
+		}
+	}
+
+	c.URI = strings.TrimSpace(raw.URI)
+	if raw.URI != "" && c.URI == "" {
+		return fmt.Errorf("egress.shadowsocks.uri must not be empty")
+	}
+
+	return nil
 }
 
 func (c *EgressConfig) setDefaults() {}
@@ -106,7 +149,7 @@ func (c EgressConfig) DefaultOutboundTag() string {
 
 // Validate checks that optional upstream fields are complete and compatible
 // with the selected kernel.
-func (c EgressConfig) Validate(kernelType string) error {
+func (c *EgressConfig) Validate(kernelType string) error {
 	hasAddress := c.SOCKS5.Address != ""
 	hasPort := c.SOCKS5.Port != 0
 
@@ -126,17 +169,49 @@ func (c EgressConfig) Validate(kernelType string) error {
 		return fmt.Errorf("egress.socks5.address and egress.socks5.port are required when SOCKS5 authentication is configured")
 	}
 
-	hasSSAddress := c.Shadowsocks.Address != ""
-	hasSSPort := c.Shadowsocks.Port != 0
+	if err := c.Shadowsocks.normalize(); err != nil {
+		return err
+	}
+	if err := validateEgressShadowsocksDerived(c.Shadowsocks, kernelType); err != nil {
+		return err
+	}
+
+	if c.SOCKS5Enabled() && c.ShadowsocksEnabled() {
+		return fmt.Errorf("egress.socks5 and egress.shadowsocks are mutually exclusive")
+	}
+
+	return nil
+}
+
+func (c *ShadowsocksEgressConfig) normalize() error {
+	if strings.TrimSpace(c.URI) == "" {
+		return nil
+	}
+
+	address, port, method, password, err := parseShadowsocksURI(c.URI)
+	if err != nil {
+		return fmt.Errorf("invalid egress.shadowsocks.uri: %w", err)
+	}
+
+	c.Address = address
+	c.Port = port
+	c.Method = method
+	c.Password = password
+	return nil
+}
+
+func validateEgressShadowsocksDerived(c ShadowsocksEgressConfig, kernelType string) error {
+	hasSSAddress := c.Address != ""
+	hasSSPort := c.Port != 0
 	if hasSSAddress != hasSSPort {
 		return fmt.Errorf("egress.shadowsocks.address and egress.shadowsocks.port must be set together")
 	}
-	if c.Shadowsocks.Port < 0 {
+	if c.Port < 0 {
 		return fmt.Errorf("egress.shadowsocks.port must not be negative")
 	}
 
-	hasSSMethod := c.Shadowsocks.Method != ""
-	hasSSPassword := c.Shadowsocks.Password != ""
+	hasSSMethod := c.Method != ""
+	hasSSPassword := c.Password != ""
 	if hasSSMethod != hasSSPassword {
 		return fmt.Errorf("egress.shadowsocks.method and egress.shadowsocks.password must be set together")
 	}
@@ -147,24 +222,122 @@ func (c EgressConfig) Validate(kernelType string) error {
 		return fmt.Errorf("egress.shadowsocks.address and egress.shadowsocks.port are required when Shadowsocks authentication is configured")
 	}
 	if hasSSMethod {
-		if err := validateEgressShadowsocksMethod(c.Shadowsocks.Method); err != nil {
+		if err := validateEgressShadowsocksMethod(c.Method); err != nil {
 			return err
 		}
-		if err := validateEgressShadowsocksMethodForKernel(kernelType, c.Shadowsocks.Method); err != nil {
+		if err := validateEgressShadowsocksMethodForKernel(kernelType, c.Method); err != nil {
 			return err
 		}
 	}
-	if c.ShadowsocksEnabled() {
-		if err := validateEgressShadowsocksPassword(c.Shadowsocks.Method, c.Shadowsocks.Password); err != nil {
+	if hasSSAddress && hasSSPort && hasSSMethod && hasSSPassword {
+		if err := validateEgressShadowsocksPassword(c.Method, c.Password); err != nil {
 			return fmt.Errorf("invalid egress.shadowsocks.password: %w", err)
 		}
 	}
 
-	if c.SOCKS5Enabled() && c.ShadowsocksEnabled() {
-		return fmt.Errorf("egress.socks5 and egress.shadowsocks are mutually exclusive")
+	return nil
+}
+
+func parseShadowsocksURI(raw string) (string, int, string, string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", 0, "", "", fmt.Errorf("must not be empty")
 	}
 
-	return nil
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return "", 0, "", "", err
+	}
+	if parsed.Scheme != "ss" {
+		return "", 0, "", "", fmt.Errorf("expected ss:// URI")
+	}
+
+	host := parsed.Hostname()
+	if host == "" {
+		return "", 0, "", "", fmt.Errorf("missing host")
+	}
+
+	portText := parsed.Port()
+	if portText == "" {
+		return "", 0, "", "", fmt.Errorf("missing port")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port <= 0 {
+		return "", 0, "", "", fmt.Errorf("invalid port %q", portText)
+	}
+
+	method, password, err := parseShadowsocksURIUserInfo(parsed)
+	if err != nil {
+		return "", 0, "", "", err
+	}
+
+	return host, port, method, password, nil
+}
+
+func parseShadowsocksURIUserInfo(parsed *url.URL) (string, string, error) {
+	if parsed.User == nil {
+		return "", "", fmt.Errorf("missing credentials")
+	}
+
+	if password, ok := parsed.User.Password(); ok {
+		return splitShadowsocksMethodPassword(parsed.User.Username() + ":" + password)
+	}
+
+	decoded, err := decodeShadowsocksURICredentials(parsed.User.Username())
+	if err != nil {
+		return "", "", fmt.Errorf("invalid credentials encoding: %w", err)
+	}
+
+	return splitShadowsocksMethodPassword(string(decoded))
+}
+
+func splitShadowsocksMethodPassword(value string) (string, string, error) {
+	parts := strings.SplitN(value, ":", 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("expected method:password")
+	}
+
+	method := strings.TrimSpace(parts[0])
+	password := parts[1]
+	if method == "" || password == "" {
+		return "", "", fmt.Errorf("expected non-empty method and password")
+	}
+
+	return method, password, nil
+}
+
+func decodeShadowsocksURICredentials(value string) ([]byte, error) {
+	inputs := []string{value}
+	if padded := padBase64(value); padded != value {
+		inputs = append(inputs, padded)
+	}
+
+	decoders := []func(string) ([]byte, error){
+		base64.StdEncoding.DecodeString,
+		base64.RawStdEncoding.DecodeString,
+		base64.URLEncoding.DecodeString,
+		base64.RawURLEncoding.DecodeString,
+	}
+
+	var lastErr error
+	for _, input := range inputs {
+		for _, decode := range decoders {
+			decoded, err := decode(input)
+			if err == nil {
+				return decoded, nil
+			}
+			lastErr = err
+		}
+	}
+
+	return nil, lastErr
+}
+
+func padBase64(value string) string {
+	if rem := len(value) % 4; rem != 0 {
+		return value + strings.Repeat("=", 4-rem)
+	}
+	return value
 }
 
 func validateEgressShadowsocksMethod(method string) error {

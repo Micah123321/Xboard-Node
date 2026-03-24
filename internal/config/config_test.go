@@ -1,6 +1,8 @@
 package config
 
 import (
+	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +17,11 @@ func writeTemp(t *testing.T, content string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func ssURI(method, password, host string, port int) string {
+	userInfo := base64.StdEncoding.EncodeToString([]byte(method + ":" + password))
+	return fmt.Sprintf("ss://%s@%s:%d", userInfo, host, port)
 }
 
 func TestLoad_ValidConfig(t *testing.T) {
@@ -457,10 +464,7 @@ panel:
 kernel:
   egress:
     shadowsocks:
-      address: "127.0.0.1"
-      port: 8388
-      method: "aes-128-gcm"
-      password: "test-password"
+      uri: "`+ssURI("aes-128-gcm", "test-password", "127.0.0.1", 8388)+`"
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -483,10 +487,7 @@ panel:
 kernel:
   egress:
     shadowsocks:
-      address: "cu1.utieol.com"
-      port: 50552
-      method: "2022-blake3-aes-256-gcm"
-      password: "ZWNhZDc0OGIyMmRmYjlmNjliMzM1OTFmMDUwMmY5ZWU=:MDJiODI4NjctYTcwNS00ZTZkLWFjNzEtMDQ1ZjU0ZDY="
+      uri: "ss://MjAyMi1ibGFrZTMtYWVzLTI1Ni1nY206ODhvMGZwK3BBV29XS3ZrRGUydWhxek4zcDE3Uk5mQzdhSE0wVldJTUtuZz06UnlObkhsZ3lLT3ZKVzRCWVY5TnhWMDlMWkhnWGM1Ui9wamxKSjRPR3QyND0=@38.182.122.32:37605?type=tcp#93m0pjsu"
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -494,6 +495,12 @@ kernel:
 	}
 	if !cfg.Kernel.Egress.ShadowsocksEnabled() {
 		t.Fatal("expected Shadowsocks proxy to be enabled")
+	}
+	if cfg.Kernel.Egress.Shadowsocks.Address != "38.182.122.32" {
+		t.Fatalf("address: got %q", cfg.Kernel.Egress.Shadowsocks.Address)
+	}
+	if cfg.Kernel.Egress.Shadowsocks.Port != 37605 {
+		t.Fatalf("port: got %d", cfg.Kernel.Egress.Shadowsocks.Port)
 	}
 }
 
@@ -533,7 +540,7 @@ kernel:
 	}
 }
 
-func TestLoad_EgressShadowsocks_MissingMethod(t *testing.T) {
+func TestLoad_EgressShadowsocks_LegacyFieldsRejected(t *testing.T) {
 	path := writeTemp(t, `
 panel:
   url: "https://example.com"
@@ -544,11 +551,15 @@ kernel:
     shadowsocks:
       address: "127.0.0.1"
       port: 8388
+      method: "aes-128-gcm"
       password: "test-password"
 `)
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("expected error for shadowsocks config without method")
+		t.Fatal("expected error for legacy shadowsocks fields")
+	}
+	if !strings.Contains(err.Error(), "egress.shadowsocks.address is no longer supported") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -561,10 +572,7 @@ panel:
 kernel:
   egress:
     shadowsocks:
-      address: "127.0.0.1"
-      port: 8388
-      method: "2022-blake3-aes-128-gcm"
-      password: "not-base64"
+      uri: "`+ssURI("2022-blake3-aes-128-gcm", "not-base64", "127.0.0.1", 8388)+`"
 `)
 	_, err := Load(path)
 	if err == nil {
@@ -581,10 +589,7 @@ panel:
 kernel:
   egress:
     shadowsocks:
-      address: "127.0.0.1"
-      port: 8388
-      method: "aes-129-gcm"
-      password: "test-password"
+      uri: "`+ssURI("aes-129-gcm", "test-password", "127.0.0.1", 8388)+`"
 `)
 	_, err := Load(path)
 	if err == nil {
@@ -605,10 +610,7 @@ kernel:
   type: "xray"
   egress:
     shadowsocks:
-      address: "127.0.0.1"
-      port: 8388
-      method: "aes-192-gcm"
-      password: "test-password"
+      uri: "`+ssURI("aes-192-gcm", "test-password", "127.0.0.1", 8388)+`"
 `)
 	_, err := Load(path)
 	if err == nil {
@@ -629,10 +631,7 @@ kernel:
   type: "singbox"
   egress:
     shadowsocks:
-      address: "127.0.0.1"
-      port: 8388
-      method: "aes-192-gcm"
-      password: "test-password"
+      uri: "`+ssURI("aes-192-gcm", "test-password", "127.0.0.1", 8388)+`"
 `)
 	cfg, err := Load(path)
 	if err != nil {
@@ -655,10 +654,7 @@ kernel:
       address: "127.0.0.1"
       port: 1080
     shadowsocks:
-      address: "127.0.0.1"
-      port: 8388
-      method: "aes-128-gcm"
-      password: "test-password"
+      uri: "`+ssURI("aes-128-gcm", "test-password", "127.0.0.1", 8388)+`"
 `)
 	_, err := Load(path)
 	if err == nil {

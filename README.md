@@ -126,9 +126,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs
   -a https://panel.example.com \
   -t YOUR_TOKEN \
   -n 1 \
-  --egress-shadowsocks 127.0.0.1:8388 \
-  --egress-shadowsocks-method aes-128-gcm \
-  --egress-shadowsocks-password your-password
+  --egress-shadowsocks-uri 'ss://YWVzLTEyOC1nY206eW91ci1wYXNzd29yZA==@127.0.0.1:8388'
 ```
 
 如果默认出站需要走 SS2022：
@@ -138,15 +136,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs
   -a https://panel.example.com \
   -t YOUR_TOKEN \
   -n 1 \
-  --egress-shadowsocks cu1.xxx.com:50552 \
-  --egress-shadowsocks-method 2022-blake3-aes-256-gcm \
-  --egress-shadowsocks-password '<server_key>:<user_key>'
+  --egress-shadowsocks-uri 'ss://MjAyMi1ibGFrZTMtYWVzLTI1Ni1nY206ODhvMGZwK3BBV29XS3ZrRGUydWhxek4zcDE3Uk5mQzdhSE0wVldJTUtuZz06UnlObkhsZ3lLT3ZKVzRCWVY5TnhWMDlMWkhnWGM1Ui9wamxKSjRPR3QyND0=@38.182.122.32:37605?type=tcp#egress'
 ```
 
 - 这项能力同时支持 `singbox` 和 `xray`
 - 当配置了 `kernel.egress.socks5` 后，普通 TCP/UDP 默认出站会走这个 SOCKS5
 - 如果你更需要接入 `ss` / `ss2022` 落地节点，也可以改用 `kernel.egress.shadowsocks`；默认路由行为与 `socks5` 保持一致，但两者只能二选一
-- `install.sh` 现在也支持 `--egress-shadowsocks`、`--egress-shadowsocks-method`、`--egress-shadowsocks-password` 三个参数
+- `install.sh` 现在使用单个 `--egress-shadowsocks-uri 'ss://...'` 参数写入默认 SS 出站
+- `kernel.egress.shadowsocks` 现在只接受 `uri`；旧的 `address / port / method / password` 写法会在加载配置时直接报错
 - `aes-192-gcm` 仅建议在 `singbox` 内核下使用；当前安装脚本会拦截 `xray + aes-192-gcm` 组合，避免写入后启动失败
 - 如果未配置 SOCKS5，默认出站仍然是直连，但默认拦截规则依然会照常生效
 - 安装脚本生成的 `config.yml` 会默认写出 `kernel.egress.enable_default_rules: true` 和 `kernel.egress.prefer_ipv4: true`，你可以直接在本地改这两个开关
@@ -270,13 +267,9 @@ kernel:
       # username: "your-user"
       # password: "your-pass"
     # shadowsocks:
-    #   address: "cu1.utieol.com"
-    #   port: 50552
-    #   method: "2022-blake3-aes-256-gcm"
-    #   password: "<server_key>:<user_key>"
+    #   uri: "ss://MjAyMi1ibGFrZTMtYWVzLTI1Ni1nY206ODhvMGZwK3BBV29XS3ZrRGUydWhxek4zcDE3Uk5mQzdhSE0wVldJTUtuZz06UnlObkhsZ3lLT3ZKVzRCWVY5TnhWMDlMWkhnWGM1Ui9wamxKSjRPR3QyND0=@38.182.122.32:37605?type=tcp#egress"
     #   # 传统 SS 示例：
-    #   # method: "aes-128-gcm"
-    #   # password: "your-password"
+    #   # uri: "ss://YWVzLTEyOC1nY206eW91ci1wYXNzd29yZA==@127.0.0.1:8388"
 ```
 
 完整字段请参考 [config.yml.example](config.yml.example)。
@@ -308,7 +301,7 @@ kernel:
 
 - 如果你的用户体系就是 UUID，请将节点 cipher 改回传统 Shadowsocks，例如 `aes-128-gcm`、`aes-256-gcm`、`chacha20-ietf-poly1305`
 - 如果你必须使用 `2022-blake3-*`，请确保服务端 `server_key` 和每个用户密码都使用标准 base64 密钥，而不是 UUID
-- 如果你把它配置在 `kernel.egress.shadowsocks` 里，单用户可以直接填一个标准 base64 key；多用户或中转场景可以填 `<server_key>:<user_key>`
+- 如果你把它配置在 `kernel.egress.shadowsocks.uri` 里，URI 解码后的 `method:password` 中仍然使用标准 base64 key；多用户或中转场景依然是 `<server_key>:<user_key>`
 
 ## License
 

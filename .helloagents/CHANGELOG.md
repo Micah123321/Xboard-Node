@@ -4,6 +4,10 @@
 
 ### 快速修复
 
+- **[config/install]**: kernel.egress.shadowsocks 改为仅接受 ss://... URI 输入，配置加载阶段会完成传统 SS / SS2022 URI 解析、method 白名单校验和 SS2022 密钥校验；install.sh 同步切换为 --egress-shadowsocks-uri，README 与 config.yml.example 全部改用 URI 示例。
+  - 类型: 快速修复（URI-only 出站输入收敛）
+  - 文件: internal/config/egress.go, internal/config/config_test.go, install.sh, README.md, config.yml.example
+
 - **[kernel]**: 为 `sing-box` 补充 `tuic + kernel.egress.shadowsocks` 最小回归测试。默认测试集新增配置生成断言，验证 `route.final` 指向 `default-shadowsocks`；`with_quic` 条件下新增运行态测试，验证 TUIC 启动后的默认出站仍为 `default-shadowsocks`。本次未修改运行逻辑，因为当前代码路径未复现默认出站回退到 `direct`。
   - 类型: 快速修复（测试补强，无运行逻辑改动）
   - 文件: internal/kernel/singbox/config_test.go, internal/kernel/singbox/tuic_with_quic_test.go

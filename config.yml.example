@@ -36,13 +36,9 @@ kernel:
   #     # password: "your-pass"
   #   # socks5 和 shadowsocks 只能二选一
   #   shadowsocks:
-  #     address: "cu1.utieol.com"
-  #     port: 50552
-  #     method: "2022-blake3-aes-256-gcm"
-  #     password: "<server_key>:<user_key>"
+  #     uri: "ss://MjAyMi1ibGFrZTMtYWVzLTI1Ni1nY206ODhvMGZwK3BBV29XS3ZrRGUydWhxek4zcDE3Uk5mQzdhSE0wVldJTUtuZz06UnlObkhsZ3lLT3ZKVzRCWVY5TnhWMDlMWkhnWGM1Ui9wamxKSjRPR3QyND0=@38.182.122.32:37605?type=tcp#egress"
   #     # 传统 SS 示例：
-  #     # method: "aes-128-gcm"
-  #     # password: "your-password"
+  #     # uri: "ss://YWVzLTEyOC1nY206eW91ci1wYXNzd29yZA==@127.0.0.1:8388"
 
 # TLS 证书配置（可选，也可交由面板下发）
 # cert_mode: "http" | "dns" | "self" | "file" | "none"
