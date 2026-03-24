@@ -267,7 +267,7 @@ func (c *Config) validate() error {
 	if err := c.Cert.Validate(); err != nil {
 		return err
 	}
-	if err := c.Kernel.Egress.Validate(); err != nil {
+	if err := c.Kernel.Egress.Validate(c.Kernel.Type); err != nil {
 		return err
 	}
 	if c.Node.PushInterval < 0 {

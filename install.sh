@@ -9,6 +9,7 @@ set -e
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 2 -k xray
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 3 --gomemlimit 256MiB --gogc 50
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 3 --egress-socks5 127.0.0.1:1080
+#   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 3 --egress-shadowsocks 127.0.0.1:8388 --egress-shadowsocks-method aes-128-gcm --egress-shadowsocks-password your-password
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 4 --cert-domain node.example.com
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 5 --cert-mode dns --cert-domain node.example.com --cert-dns-provider cloudflare --cert-dns-env CF_API_TOKEN=xxxx
 #
@@ -56,6 +57,11 @@ EGRESS_SOCKS5_HOST=""
 EGRESS_SOCKS5_PORT=""
 EGRESS_SOCKS5_USER=""
 EGRESS_SOCKS5_PASS=""
+EGRESS_SHADOWSOCKS=""
+EGRESS_SHADOWSOCKS_HOST=""
+EGRESS_SHADOWSOCKS_PORT=""
+EGRESS_SHADOWSOCKS_METHOD=""
+EGRESS_SHADOWSOCKS_PASSWORD=""
 CERT_MODE=""
 CERT_DOMAIN=""
 CERT_EMAIL=""
@@ -226,6 +232,52 @@ parse_socks5_endpoint() {
     return 0
 }
 
+parse_shadowsocks_endpoint() {
+    local endpoint="$1"
+    local host=""
+    local port=""
+
+    if [[ "$endpoint" =~ ^\[([^\]]+)\]:([0-9]+)$ ]]; then
+        host="${BASH_REMATCH[1]}"
+        port="${BASH_REMATCH[2]}"
+    elif [[ "$endpoint" =~ ^([^:]+):([0-9]+)$ ]]; then
+        host="${BASH_REMATCH[1]}"
+        port="${BASH_REMATCH[2]}"
+    else
+        return 1
+    fi
+
+    EGRESS_SHADOWSOCKS_HOST="$host"
+    EGRESS_SHADOWSOCKS_PORT="$port"
+    return 0
+}
+
+is_supported_shadowsocks_method() {
+    local method="$1"
+    local kernel="$2"
+
+    case "$method" in
+        aes-128-gcm|aes-256-gcm|chacha20-ietf-poly1305|2022-blake3-aes-128-gcm|2022-blake3-aes-256-gcm)
+            return 0
+            ;;
+        aes-192-gcm)
+            [ "$kernel" = "singbox" ]
+            return
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+print_supported_shadowsocks_methods() {
+    if [ "$KERNEL_TYPE" = "xray" ]; then
+        echo "aes-128-gcm, aes-256-gcm, chacha20-ietf-poly1305, 2022-blake3-aes-128-gcm, 2022-blake3-aes-256-gcm"
+    else
+        echo "aes-128-gcm, aes-192-gcm, aes-256-gcm, chacha20-ietf-poly1305, 2022-blake3-aes-128-gcm, 2022-blake3-aes-256-gcm"
+    fi
+}
+
 # ─── 参数解析 ────────────────────────────────────────────────────────
 
 parse_args() {
@@ -241,6 +293,9 @@ parse_args() {
             --egress-socks5) EGRESS_SOCKS5="$2";  shift 2 ;;
             --egress-socks5-user) EGRESS_SOCKS5_USER="$2"; shift 2 ;;
             --egress-socks5-pass) EGRESS_SOCKS5_PASS="$2"; shift 2 ;;
+            --egress-shadowsocks) EGRESS_SHADOWSOCKS="$2"; shift 2 ;;
+            --egress-shadowsocks-method) EGRESS_SHADOWSOCKS_METHOD="$2"; shift 2 ;;
+            --egress-shadowsocks-password) EGRESS_SHADOWSOCKS_PASSWORD="$2"; shift 2 ;;
             --cert-mode)     CERT_MODE="$2";      shift 2 ;;
             --cert-domain)   CERT_DOMAIN="$2";    shift 2 ;;
             --cert-email)    CERT_EMAIL="$2";     shift 2 ;;
@@ -318,6 +373,43 @@ validate_params() {
 
     if ([ -n "$EGRESS_SOCKS5_USER" ] || [ -n "$EGRESS_SOCKS5_PASS" ]) && [ -z "$EGRESS_SOCKS5" ]; then
         log_error "配置 SOCKS5 认证时必须同时提供 --egress-socks5 host:port"
+        exit 1
+    fi
+
+    if [ -n "$EGRESS_SHADOWSOCKS" ]; then
+        if ! parse_shadowsocks_endpoint "$EGRESS_SHADOWSOCKS"; then
+            log_error "Shadowsocks 出站格式无效: ${EGRESS_SHADOWSOCKS}，必须是 host:port 或 [ipv6]:port"
+            exit 1
+        fi
+    fi
+
+    if { [ -n "$EGRESS_SHADOWSOCKS_METHOD" ] && [ -z "$EGRESS_SHADOWSOCKS_PASSWORD" ]; } || \
+       { [ -z "$EGRESS_SHADOWSOCKS_METHOD" ] && [ -n "$EGRESS_SHADOWSOCKS_PASSWORD" ]; }; then
+        log_error "Shadowsocks 加密方式和密码必须同时提供 (--egress-shadowsocks-method / --egress-shadowsocks-password)"
+        exit 1
+    fi
+
+    if ([ -n "$EGRESS_SHADOWSOCKS_METHOD" ] || [ -n "$EGRESS_SHADOWSOCKS_PASSWORD" ]) && [ -z "$EGRESS_SHADOWSOCKS" ]; then
+        log_error "配置 Shadowsocks 出站时必须同时提供 --egress-shadowsocks host:port"
+        exit 1
+    fi
+
+    if [ -n "$EGRESS_SHADOWSOCKS" ] && [ -z "$EGRESS_SHADOWSOCKS_METHOD" ]; then
+        log_error "Shadowsocks 出站必须提供加密方式 (--egress-shadowsocks-method)"
+        exit 1
+    fi
+
+    if [ -n "$EGRESS_SHADOWSOCKS_METHOD" ] && ! is_supported_shadowsocks_method "$EGRESS_SHADOWSOCKS_METHOD" "$KERNEL_TYPE"; then
+        log_error "不支持的 Shadowsocks 加密方式: ${EGRESS_SHADOWSOCKS_METHOD}"
+        log_error "当前内核 ${KERNEL_TYPE} 可用方式: $(print_supported_shadowsocks_methods)"
+        if [ "$KERNEL_TYPE" = "xray" ] && [ "$EGRESS_SHADOWSOCKS_METHOD" = "aes-192-gcm" ]; then
+            log_error "aes-192-gcm 当前仅建议 singbox 使用，xray 不在本项目的可验证支持范围内"
+        fi
+        exit 1
+    fi
+
+    if [ -n "$EGRESS_SOCKS5" ] && [ -n "$EGRESS_SHADOWSOCKS" ]; then
+        log_error "SOCKS5 和 Shadowsocks 默认出站只能二选一"
         exit 1
     fi
 
@@ -452,14 +544,31 @@ prompt_cert_settings() {
 }
 
 prompt_egress_settings() {
-    if [ -z "$EGRESS_SOCKS5" ]; then
-        echo ""
-        read -rp "  默认 SOCKS5 出站 (host:port，留空则不设置): " EGRESS_SOCKS5
-    else
-        echo -e "  默认 SOCKS5 出站: ${CYAN}${EGRESS_SOCKS5}${NC}"
+    echo ""
+
+    if [ -z "$EGRESS_SOCKS5" ] && [ -z "$EGRESS_SHADOWSOCKS" ]; then
+        echo "  默认出站:"
+        echo "    1) 不设置 / direct"
+        echo "    2) SOCKS5"
+        echo "    3) Shadowsocks / SS2022"
+        read -rp "  请选择 [1/2/3]: " EGRESS_CHOICE
+        case "$EGRESS_CHOICE" in
+            2)
+                read -rp "  默认 SOCKS5 出站 (host:port): " EGRESS_SOCKS5
+                ;;
+            3)
+                read -rp "  默认 Shadowsocks 出站 (host:port): " EGRESS_SHADOWSOCKS
+                echo "  可用加密方式: $(print_supported_shadowsocks_methods)"
+                read -rp "  Shadowsocks 加密方式: " EGRESS_SHADOWSOCKS_METHOD
+                read -rp "  Shadowsocks 密码 (SS2022 可用 <server_key>:<user_key>): " EGRESS_SHADOWSOCKS_PASSWORD
+                ;;
+            *)
+                ;;
+        esac
     fi
 
     if [ -n "$EGRESS_SOCKS5" ]; then
+        echo -e "  默认 SOCKS5 出站: ${CYAN}${EGRESS_SOCKS5}${NC}"
         if [ -z "$EGRESS_SOCKS5_USER" ]; then
             read -rp "  SOCKS5 用户名 (可选，留空跳过): " EGRESS_SOCKS5_USER
         else
@@ -470,6 +579,20 @@ prompt_egress_settings() {
             read -rp "  SOCKS5 密码: " EGRESS_SOCKS5_PASS
         elif [ -n "$EGRESS_SOCKS5_PASS" ]; then
             echo -e "  SOCKS5 密码: ${CYAN}***${NC}"
+        fi
+    elif [ -n "$EGRESS_SHADOWSOCKS" ]; then
+        echo -e "  默认 Shadowsocks 出站: ${CYAN}${EGRESS_SHADOWSOCKS}${NC}"
+        if [ -z "$EGRESS_SHADOWSOCKS_METHOD" ]; then
+            echo "  可用加密方式: $(print_supported_shadowsocks_methods)"
+            read -rp "  Shadowsocks 加密方式: " EGRESS_SHADOWSOCKS_METHOD
+        else
+            echo -e "  Shadowsocks 加密方式: ${CYAN}${EGRESS_SHADOWSOCKS_METHOD}${NC}"
+        fi
+
+        if [ -z "$EGRESS_SHADOWSOCKS_PASSWORD" ]; then
+            read -rp "  Shadowsocks 密码 (SS2022 可用 <server_key>:<user_key>): " EGRESS_SHADOWSOCKS_PASSWORD
+        else
+            echo -e "  Shadowsocks 密码: ${CYAN}***${NC}"
         fi
     fi
 }
@@ -758,6 +881,13 @@ write_node_config() {
       username: \"${EGRESS_SOCKS5_USER}\"
       password: \"${EGRESS_SOCKS5_PASS}\""
         fi
+    elif [ -n "$EGRESS_SHADOWSOCKS" ]; then
+        egress_block="${egress_block}
+    shadowsocks:
+      address: \"${EGRESS_SHADOWSOCKS_HOST}\"
+      port: ${EGRESS_SHADOWSOCKS_PORT}
+      method: \"${EGRESS_SHADOWSOCKS_METHOD}\"
+      password: \"${EGRESS_SHADOWSOCKS_PASSWORD}\""
     fi
 
     cert_mode_resolved="$(effective_cert_mode)"
@@ -967,6 +1097,11 @@ deploy_node() {
         echo "  默认出站: SOCKS5"
         echo "    地址:      ${EGRESS_SOCKS5}"
         [ -n "$EGRESS_SOCKS5_USER" ] && echo "    用户名:    ${EGRESS_SOCKS5_USER}"
+    elif [ -n "$EGRESS_SHADOWSOCKS" ]; then
+        echo "  默认出站: Shadowsocks"
+        echo "    地址:      ${EGRESS_SHADOWSOCKS}"
+        echo "    加密方式:  ${EGRESS_SHADOWSOCKS_METHOD}"
+        echo "    密码:      ***"
     else
         echo "  默认出站: 直连（内置防滥用拦截规则默认开启）"
     fi
@@ -1164,7 +1299,7 @@ print_help() {
 
   本机部署（默认，推荐，适合减少 Docker 内存占用）:
 
-    install.sh -a <url> -t <token> -n <node_id> [-T <node_type>] [-k singbox|xray] [--gomemlimit 256MiB] [--gogc 50] [--egress-socks5 127.0.0.1:1080] [--cert-domain node.example.com]
+    install.sh -a <url> -t <token> -n <node_id> [-T <node_type>] [-k singbox|xray] [--gomemlimit 256MiB] [--gogc 50] [--egress-socks5 127.0.0.1:1080] [--egress-shadowsocks 127.0.0.1:8388 --egress-shadowsocks-method aes-128-gcm --egress-shadowsocks-password xxx] [--cert-domain node.example.com]
 
   Docker 部署:
 
@@ -1181,6 +1316,13 @@ print_help() {
         --egress-socks5 默认 SOCKS5 出站 (格式 host:port 或 [ipv6]:port)
         --egress-socks5-user SOCKS5 用户名
         --egress-socks5-pass SOCKS5 密码
+        --egress-shadowsocks 默认 Shadowsocks 出站 (格式 host:port 或 [ipv6]:port)
+        --egress-shadowsocks-method Shadowsocks 加密方式
+                              singbox: aes-128-gcm, aes-192-gcm, aes-256-gcm, chacha20-ietf-poly1305,
+                                       2022-blake3-aes-128-gcm, 2022-blake3-aes-256-gcm
+                              xray:    aes-128-gcm, aes-256-gcm, chacha20-ietf-poly1305,
+                                       2022-blake3-aes-128-gcm, 2022-blake3-aes-256-gcm
+        --egress-shadowsocks-password Shadowsocks 密码 (SS2022 可用 <server_key>:<user_key>)
         --cert-mode    证书模式          (http、dns、self、none)
         --cert-domain  证书域名          (ACME 必填；仅传域名时默认走 HTTP-01)
         --cert-email   ACME 邮箱         (可选，推荐)
@@ -1199,6 +1341,12 @@ print_help() {
 
     # 本机部署节点 3，所有默认出站经 SOCKS5 转发
     bash install.sh -a https://panel.example.com -t mytoken123 -n 3 --egress-socks5 127.0.0.1:1080
+
+    # 本机部署节点 3，所有默认出站经传统 Shadowsocks 转发
+    bash install.sh -a https://panel.example.com -t mytoken123 -n 3 --egress-shadowsocks 127.0.0.1:8388 --egress-shadowsocks-method aes-128-gcm --egress-shadowsocks-password your-password
+
+    # 本机部署节点 3，所有默认出站经 SS2022 转发
+    bash install.sh -a https://panel.example.com -t mytoken123 -n 3 --egress-shadowsocks 127.0.0.1:8388 --egress-shadowsocks-method 2022-blake3-aes-256-gcm --egress-shadowsocks-password server_key:user_key
 
     # 本机部署节点 4，自动申请 ACME HTTP-01 证书
     bash install.sh -a https://panel.example.com -t mytoken123 -n 4 --cert-domain node.example.com

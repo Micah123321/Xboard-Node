@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -531,6 +532,77 @@ kernel:
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for invalid shadowsocks 2022 password")
+	}
+}
+
+func TestLoad_EgressShadowsocks_InvalidTraditionalMethod(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+kernel:
+  egress:
+    shadowsocks:
+      address: "127.0.0.1"
+      port: 8388
+      method: "aes-129-gcm"
+      password: "test-password"
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid traditional shadowsocks method")
+	}
+	if !strings.Contains(err.Error(), `unsupported egress.shadowsocks.method "aes-129-gcm"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoad_EgressShadowsocks_AES192GCM_XrayRejected(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+kernel:
+  type: "xray"
+  egress:
+    shadowsocks:
+      address: "127.0.0.1"
+      port: 8388
+      method: "aes-192-gcm"
+      password: "test-password"
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for xray + aes-192-gcm")
+	}
+	if !strings.Contains(err.Error(), `egress.shadowsocks.method "aes-192-gcm" is not supported when kernel.type is "xray"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoad_EgressShadowsocks_AES192GCM_SingboxAccepted(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+kernel:
+  type: "singbox"
+  egress:
+    shadowsocks:
+      address: "127.0.0.1"
+      port: 8388
+      method: "aes-192-gcm"
+      password: "test-password"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Kernel.Egress.ShadowsocksEnabled() {
+		t.Fatal("expected Shadowsocks proxy to be enabled")
 	}
 }
 

@@ -119,9 +119,35 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs
   --egress-socks5-pass your-pass
 ```
 
+如果默认出站需要走传统 Shadowsocks：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs/heads/dev/install.sh) \
+  -a https://panel.example.com \
+  -t YOUR_TOKEN \
+  -n 1 \
+  --egress-shadowsocks 127.0.0.1:8388 \
+  --egress-shadowsocks-method aes-128-gcm \
+  --egress-shadowsocks-password your-password
+```
+
+如果默认出站需要走 SS2022：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs/heads/dev/install.sh) \
+  -a https://panel.example.com \
+  -t YOUR_TOKEN \
+  -n 1 \
+  --egress-shadowsocks cu1.xxx.com:50552 \
+  --egress-shadowsocks-method 2022-blake3-aes-256-gcm \
+  --egress-shadowsocks-password '<server_key>:<user_key>'
+```
+
 - 这项能力同时支持 `singbox` 和 `xray`
 - 当配置了 `kernel.egress.socks5` 后，普通 TCP/UDP 默认出站会走这个 SOCKS5
 - 如果你更需要接入 `ss` / `ss2022` 落地节点，也可以改用 `kernel.egress.shadowsocks`；默认路由行为与 `socks5` 保持一致，但两者只能二选一
+- `install.sh` 现在也支持 `--egress-shadowsocks`、`--egress-shadowsocks-method`、`--egress-shadowsocks-password` 三个参数
+- `aes-192-gcm` 仅建议在 `singbox` 内核下使用；当前安装脚本会拦截 `xray + aes-192-gcm` 组合，避免写入后启动失败
 - 如果未配置 SOCKS5，默认出站仍然是直连，但默认拦截规则依然会照常生效
 - 安装脚本生成的 `config.yml` 会默认写出 `kernel.egress.enable_default_rules: true` 和 `kernel.egress.prefer_ipv4: true`，你可以直接在本地改这两个开关
 

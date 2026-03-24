@@ -9,6 +9,15 @@ import (
 const DefaultSOCKS5ProxyTag = "default-socks5"
 const DefaultShadowsocksProxyTag = "default-shadowsocks"
 
+var supportedShadowsocksMethods = map[string]struct{}{
+	"aes-128-gcm":             {},
+	"aes-192-gcm":             {},
+	"aes-256-gcm":             {},
+	"chacha20-ietf-poly1305":  {},
+	"2022-blake3-aes-128-gcm": {},
+	"2022-blake3-aes-256-gcm": {},
+}
+
 // EgressConfig controls outbound proxying and built-in abuse-prevention rules.
 type EgressConfig struct {
 	// EnableDefaultRules prepends a maintained blocklist and private-network
@@ -95,8 +104,9 @@ func (c EgressConfig) DefaultOutboundTag() string {
 	return "direct"
 }
 
-// Validate checks that optional SOCKS5 upstream fields are complete.
-func (c EgressConfig) Validate() error {
+// Validate checks that optional upstream fields are complete and compatible
+// with the selected kernel.
+func (c EgressConfig) Validate(kernelType string) error {
 	hasAddress := c.SOCKS5.Address != ""
 	hasPort := c.SOCKS5.Port != 0
 
@@ -136,6 +146,14 @@ func (c EgressConfig) Validate() error {
 	if (hasSSMethod || hasSSPassword) && !(hasSSAddress && hasSSPort) {
 		return fmt.Errorf("egress.shadowsocks.address and egress.shadowsocks.port are required when Shadowsocks authentication is configured")
 	}
+	if hasSSMethod {
+		if err := validateEgressShadowsocksMethod(c.Shadowsocks.Method); err != nil {
+			return err
+		}
+		if err := validateEgressShadowsocksMethodForKernel(kernelType, c.Shadowsocks.Method); err != nil {
+			return err
+		}
+	}
 	if c.ShadowsocksEnabled() {
 		if err := validateEgressShadowsocksPassword(c.Shadowsocks.Method, c.Shadowsocks.Password); err != nil {
 			return fmt.Errorf("invalid egress.shadowsocks.password: %w", err)
@@ -146,6 +164,20 @@ func (c EgressConfig) Validate() error {
 		return fmt.Errorf("egress.socks5 and egress.shadowsocks are mutually exclusive")
 	}
 
+	return nil
+}
+
+func validateEgressShadowsocksMethod(method string) error {
+	if _, ok := supportedShadowsocksMethods[method]; !ok {
+		return fmt.Errorf("unsupported egress.shadowsocks.method %q", method)
+	}
+	return nil
+}
+
+func validateEgressShadowsocksMethodForKernel(kernelType, method string) error {
+	if kernelType == "xray" && method == "aes-192-gcm" {
+		return fmt.Errorf("egress.shadowsocks.method %q is not supported when kernel.type is %q", method, kernelType)
+	}
 	return nil
 }
 
