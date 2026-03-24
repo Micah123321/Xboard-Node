@@ -33,7 +33,7 @@ log:
 		t.Fatalf("WatchConfig: %v", err)
 	}
 	defer watcher.Stop()
-	watcher.debounce = 20 * time.Millisecond
+	watcher.SetDebounce(20 * time.Millisecond)
 
 	if err := os.WriteFile(path, []byte(`
 panel:
@@ -79,7 +79,7 @@ panel:
 		t.Fatalf("WatchConfig: %v", err)
 	}
 	defer watcher.Stop()
-	watcher.debounce = 20 * time.Millisecond
+	watcher.SetDebounce(20 * time.Millisecond)
 
 	if err := os.WriteFile(path, []byte(`
 panel:

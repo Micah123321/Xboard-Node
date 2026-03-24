@@ -14,13 +14,14 @@ import (
 // Watcher reloads the config file on change (debounced) and calls onChange.
 type Watcher struct {
 	path     string
-	debounce time.Duration
 	onChange func(*Config)
 	watcher  *fsnotify.Watcher
 
 	stopOnce sync.Once
 	stopCh   chan struct{}
 	stopped  atomic.Bool
+
+	debounceNanos atomic.Int64
 }
 
 // WatchConfig watches path; invalid reloads are logged and ignored.
@@ -45,11 +46,11 @@ func WatchConfig(ctx context.Context, path string, onChange func(*Config)) (*Wat
 
 	w := &Watcher{
 		path:     absPath,
-		debounce: time.Second,
 		onChange: onChange,
 		watcher:  fsw,
 		stopCh:   make(chan struct{}),
 	}
+	w.SetDebounce(time.Second)
 
 	go w.loop(ctx)
 	slog.Info("config watcher started", "path", absPath)
@@ -82,10 +83,11 @@ func (w *Watcher) loop(ctx context.Context) {
 				continue
 			}
 
+			debounce := w.debounce()
 			if timer == nil {
-				timer = time.AfterFunc(w.debounce, w.reload)
+				timer = time.AfterFunc(debounce, w.reload)
 			} else {
-				timer.Reset(w.debounce)
+				timer.Reset(debounce)
 			}
 		case err, ok := <-w.watcher.Errors:
 			if !ok {
@@ -114,4 +116,19 @@ func (w *Watcher) reload() {
 func (w *Watcher) Stop() {
 	w.stopped.Store(true)
 	w.stopOnce.Do(func() { close(w.stopCh) })
+}
+
+func (w *Watcher) SetDebounce(delay time.Duration) {
+	if delay <= 0 {
+		delay = time.Second
+	}
+	w.debounceNanos.Store(int64(delay))
+}
+
+func (w *Watcher) debounce() time.Duration {
+	delay := time.Duration(w.debounceNanos.Load())
+	if delay <= 0 {
+		return time.Second
+	}
+	return delay
 }
