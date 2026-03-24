@@ -22,6 +22,9 @@ type Config struct {
 	// HealthPort enables a lightweight HTTP health-check endpoint on the
 	// given port (e.g. 65530). 0 = disabled (default).
 	HealthPort int `yaml:"health_port"`
+	// DebugPort enables a local-only HTTP debug endpoint bound to 127.0.0.1.
+	// 0 = disabled (default).
+	DebugPort int `yaml:"debug_port"`
 	// Nodes enables multi-node mode. When set, Panel.NodeID is ignored and
 	// one service instance is started per entry. All entries share the same
 	// panel URL/token, kernel type, log settings and runtime tuning.
@@ -275,6 +278,9 @@ func (c *Config) validate() error {
 	}
 	if c.Node.PullInterval < 0 {
 		return fmt.Errorf("node.pull_interval must not be negative")
+	}
+	if c.DebugPort < 0 {
+		return fmt.Errorf("debug_port must not be negative")
 	}
 	return nil
 }

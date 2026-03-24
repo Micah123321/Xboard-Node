@@ -83,6 +83,9 @@ panel:
 	if cfg.Cert.HTTPPort != 80 {
 		t.Errorf("default http_port: got %d, want 80", cfg.Cert.HTTPPort)
 	}
+	if cfg.DebugPort != 0 {
+		t.Errorf("default debug_port: got %d, want 0", cfg.DebugPort)
+	}
 	expectedCertDir := filepath.Join("/etc/xboard-node", "certs")
 	if cfg.Cert.CertDir != expectedCertDir {
 		t.Errorf("default cert_dir: got %q, want %q", cfg.Cert.CertDir, expectedCertDir)
@@ -382,6 +385,40 @@ node:
 	}
 	if cfg.Node.PullInterval != 60 {
 		t.Errorf("pull_interval: got %d", cfg.Node.PullInterval)
+	}
+}
+
+func TestLoad_DebugPort(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+debug_port: 18080
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DebugPort != 18080 {
+		t.Fatalf("debug_port: got %d, want 18080", cfg.DebugPort)
+	}
+}
+
+func TestLoad_DebugPortNegative(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+debug_port: -1
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for negative debug_port")
+	}
+	if !strings.Contains(err.Error(), "debug_port must not be negative") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

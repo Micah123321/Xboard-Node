@@ -1,0 +1,167 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/cedar2025/xboard-node/internal/config"
+	"github.com/cedar2025/xboard-node/internal/kernel"
+	"github.com/cedar2025/xboard-node/internal/panel"
+	"golang.org/x/time/rate"
+)
+
+type fakeDebugKernel struct {
+	name       string
+	running    bool
+	defaultTag string
+	probeDelay time.Duration
+	probeErr   error
+	probeCalls int
+}
+
+func (f *fakeDebugKernel) Name() string { return f.name }
+
+func (f *fakeDebugKernel) Protocols() []string { return nil }
+
+func (f *fakeDebugKernel) Start(*panel.NodeConfig, []panel.User, string, string) error { return nil }
+
+func (f *fakeDebugKernel) Stop() {}
+
+func (f *fakeDebugKernel) IsRunning() bool { return f.running }
+
+func (f *fakeDebugKernel) Reload(*panel.NodeConfig, []panel.User, string, string) error { return nil }
+
+func (f *fakeDebugKernel) AddUsers([]panel.User) (int, error) { return 0, nil }
+
+func (f *fakeDebugKernel) RemoveUsers([]panel.User) (int, error) { return 0, nil }
+
+func (f *fakeDebugKernel) UpdateUsers([]panel.User) (int, int, error) { return 0, 0, nil }
+
+func (f *fakeDebugKernel) GetConnections(context.Context) ([]kernel.Connection, error) {
+	return nil, nil
+}
+
+func (f *fakeDebugKernel) CloseConnection(context.Context, string) error { return nil }
+
+func (f *fakeDebugKernel) SetSpeedLimitFunc(func(string) *rate.Limiter) {}
+
+func (f *fakeDebugKernel) CurrentDefaultOutboundTag() string { return f.defaultTag }
+
+func (f *fakeDebugKernel) DefaultOutboundProbe(context.Context, string, string) (time.Duration, error) {
+	f.probeCalls++
+	if f.probeErr != nil {
+		return f.probeDelay, f.probeErr
+	}
+	return f.probeDelay, nil
+}
+
+func testDebugConfig() *config.Config {
+	return &config.Config{
+		Panel: config.PanelConfig{
+			NodeID: 322,
+		},
+		Kernel: config.KernelConfig{
+			Type: "singbox",
+			Egress: config.EgressConfig{
+				Shadowsocks: config.ShadowsocksEgressConfig{
+					Address:  "38.182.122.32",
+					Port:     30333,
+					Method:   "2022-blake3-aes-256-gcm",
+					Password: "hidden",
+				},
+			},
+		},
+	}
+}
+
+func TestDebugEgressStatus_PendingProbe(t *testing.T) {
+	svc := &Service{
+		cfg: testDebugConfig(),
+		kernel: &fakeDebugKernel{
+			name:       "sing-box",
+			running:    false,
+			defaultTag: config.DefaultShadowsocksProxyTag,
+		},
+	}
+
+	status := svc.DebugEgressStatus()
+	if !status.ProbeEnabled {
+		t.Fatal("expected probe to be enabled for sing-box + shadowsocks egress")
+	}
+	if status.DefaultOutboundTag != config.DefaultShadowsocksProxyTag {
+		t.Fatalf("default_outbound_tag = %q, want %q", status.DefaultOutboundTag, config.DefaultShadowsocksProxyTag)
+	}
+	if status.ShadowsocksUpstream == nil {
+		t.Fatal("expected shadowsocks upstream to be present")
+	}
+	if status.ShadowsocksUpstream.Address != "38.182.122.32" {
+		t.Fatalf("upstream address = %q", status.ShadowsocksUpstream.Address)
+	}
+	if status.LastProbe.Error != "kernel not running" {
+		t.Fatalf("last_probe.error = %q, want %q", status.LastProbe.Error, "kernel not running")
+	}
+}
+
+func TestTriggerShadowsocksEgressProbe_StoresLatestResult(t *testing.T) {
+	fakeKernel := &fakeDebugKernel{
+		name:       "sing-box",
+		running:    true,
+		defaultTag: config.DefaultShadowsocksProxyTag,
+		probeDelay: 25 * time.Millisecond,
+	}
+	svc := &Service{
+		cfg:    testDebugConfig(),
+		kernel: fakeKernel,
+	}
+
+	svc.triggerShadowsocksEgressProbe("test")
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for egress probe result")
+		}
+		result := svc.lastEgressProbeSnapshot()
+		if result.CheckedAt != "" {
+			if !result.Success {
+				t.Fatalf("expected successful probe, got error %q", result.Error)
+			}
+			if result.Target != defaultEgressProbeTarget {
+				t.Fatalf("target = %q, want %q", result.Target, defaultEgressProbeTarget)
+			}
+			if result.Network != defaultEgressProbeNetwork {
+				t.Fatalf("network = %q, want %q", result.Network, defaultEgressProbeNetwork)
+			}
+			if fakeKernel.probeCalls != 1 {
+				t.Fatalf("probeCalls = %d, want 1", fakeKernel.probeCalls)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestDebugEgressStatus_UnsupportedKernel(t *testing.T) {
+	cfg := testDebugConfig()
+	cfg.Kernel.Type = "xray"
+
+	svc := &Service{
+		cfg: cfg,
+		kernel: &fakeDebugKernel{
+			name:       "xray",
+			running:    true,
+			defaultTag: config.DefaultShadowsocksProxyTag,
+			probeErr:   errors.New("unreachable"),
+		},
+	}
+
+	status := svc.DebugEgressStatus()
+	if status.ProbeEnabled {
+		t.Fatal("expected probe to be disabled outside sing-box")
+	}
+	if status.LastProbe.Error != "egress debug probe is only available for sing-box" {
+		t.Fatalf("last_probe.error = %q", status.LastProbe.Error)
+	}
+}

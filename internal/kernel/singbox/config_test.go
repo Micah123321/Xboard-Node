@@ -583,6 +583,49 @@ func TestBuildConfig_WithShadowsocks2022Proxy(t *testing.T) {
 	t.Fatal("expected generated Shadowsocks 2022 outbound")
 }
 
+func TestBuildConfig_TUICWithShadowsocksProxy(t *testing.T) {
+	kcfg := config.KernelConfig{
+		LogLevel: "info",
+	}
+	kcfg.Egress.Shadowsocks.Address = "127.0.0.1"
+	kcfg.Egress.Shadowsocks.Port = 8388
+	kcfg.Egress.Shadowsocks.Method = "aes-128-gcm"
+	kcfg.Egress.Shadowsocks.Password = "test-password"
+
+	nc := &panel.NodeConfig{
+		Protocol:          "tuic",
+		ServerPort:        443,
+		ServerName:        "node.example.com",
+		CongestionControl: "bbr",
+	}
+	cfg := buildConfig(kcfg, nc, testUsers[:1], "/path/cert.pem", "/path/key.pem")
+
+	inbounds := cfg["inbounds"].([]M)
+	if len(inbounds) != 1 {
+		t.Fatalf("inbounds: got %d, want 1", len(inbounds))
+	}
+	assertMapValue(t, inbounds[0], "type", "tuic")
+
+	outbounds := cfg["outbounds"].([]M)
+	foundProxy := false
+	for _, outbound := range outbounds {
+		if outbound["tag"] == config.DefaultShadowsocksProxyTag {
+			foundProxy = true
+			assertMapValue(t, outbound, "type", "shadowsocks")
+			assertMapValue(t, outbound, "server", "127.0.0.1")
+			assertMapValue(t, outbound, "server_port", 8388)
+			assertMapValue(t, outbound, "method", "aes-128-gcm")
+			assertMapValue(t, outbound, "password", "test-password")
+		}
+	}
+	if !foundProxy {
+		t.Fatal("expected generated Shadowsocks outbound")
+	}
+
+	route := cfg["route"].(M)
+	assertMapValue(t, route, "final", config.DefaultShadowsocksProxyTag)
+}
+
 func TestBuildConfig_OutboundPriority(t *testing.T) {
 	kcfg := config.KernelConfig{
 		LogLevel: "info",

@@ -168,6 +168,27 @@ journalctl -u xboard-node@1 -f
 systemctl restart xboard-node@1
 ```
 
+## 本地 SS 出站调试端口
+
+如果你需要确认 `sing-box + kernel.egress.shadowsocks` 是否真的成为默认出站，可以额外开启一个只监听本机回环地址的调试端口：
+
+```yaml
+debug_port: 65531
+```
+
+- 监听地址固定为 `127.0.0.1:<debug_port>`，不会暴露到公网
+- 调试接口路径为 `http://127.0.0.1:<debug_port>/debug/egress`
+- 返回内容包含 `default_outbound_tag`
+- 返回内容包含 `shadowsocks_upstream.address / port / method`
+- 返回内容包含 `last_probe`（最近一次通过当前默认出站发起的真实 TCP 拨号检查结果）
+- 当前只对 `sing-box + kernel.egress.shadowsocks` 启用真实 probe；未启用 SS 出站或非 sing-box 内核时，会在返回 JSON 里明确说明
+
+示例：
+
+```bash
+curl http://127.0.0.1:65531/debug/egress
+```
+
 ## 可选方案：Docker 部署
 
 如果你更关注环境隔离，可以继续使用 Docker。只是对于小内存机器，通常更推荐上面的原生部署方式。
@@ -219,6 +240,7 @@ kernel:
 log:
   level: "info"
   output: "stdout"
+debug_port: 65531
 ```
 
 如果需要进一步压低内存使用，可以增加 `runtime` 配置：

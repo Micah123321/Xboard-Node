@@ -100,7 +100,9 @@ jobs:
         with:
           context: .
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
+          cache-from: type=gha,scope=xboard-node-docker
+          cache-to: type=gha,mode=max,scope=xboard-node-docker
           tags: |
             ${{ steps.image.outputs.name }}:latest
             ${{ steps.image.outputs.name }}:${{ github.sha }}

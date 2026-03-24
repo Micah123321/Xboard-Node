@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -23,6 +24,68 @@ var (
 	version   = "dev"
 	buildTime = "unknown"
 )
+
+type serviceRegistry struct {
+	mu       sync.RWMutex
+	services []*service.Service
+}
+
+func (r *serviceRegistry) Set(services []*service.Service) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.services = append([]*service.Service(nil), services...)
+}
+
+func (r *serviceRegistry) SnapshotDebugStatuses() []service.EgressDebugStatus {
+	r.mu.RLock()
+	services := append([]*service.Service(nil), r.services...)
+	r.mu.RUnlock()
+
+	statuses := make([]service.EgressDebugStatus, 0, len(services))
+	for _, svc := range services {
+		if svc == nil {
+			continue
+		}
+		statuses = append(statuses, svc.DebugEgressStatus())
+	}
+	return statuses
+}
+
+func newHealthMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+	return mux
+}
+
+func newDebugMux(statuses func() []service.EgressDebugStatus) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/egress", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+
+		resp := struct {
+			Nodes []service.EgressDebugStatus `json:"nodes"`
+		}{
+			Nodes: statuses(),
+		}
+
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			slog.Warn("failed to write debug response", "error", err)
+		}
+	})
+	return mux
+}
 
 func main() {
 	configPath := flag.String("c", "config.yml", "config file path")
@@ -51,6 +114,9 @@ func main() {
 func runWithReload(initialCfg *config.Config, configPath string) {
 	var healthSrv *http.Server
 	var healthPort int
+	var debugSrv *http.Server
+	var debugPort int
+	var registry serviceRegistry
 
 	startHealth := func(port int) {
 		if port <= 0 {
@@ -62,13 +128,7 @@ func runWithReload(initialCfg *config.Config, configPath string) {
 			slog.Error("failed to start health check listener", "port", port, "error", err)
 			os.Exit(1)
 		}
-		mux := http.NewServeMux()
-		mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"status":"ok"}`))
-		})
-		healthSrv = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		healthSrv = &http.Server{Handler: newHealthMux(), ReadHeaderTimeout: 5 * time.Second}
 		healthPort = port
 		go func() {
 			slog.Info("health check listening", "addr", ln.Addr())
@@ -78,20 +138,53 @@ func runWithReload(initialCfg *config.Config, configPath string) {
 		}()
 	}
 
+	startDebug := func(port int) {
+		if port <= 0 {
+			debugPort = 0
+			return
+		}
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			slog.Error("failed to start local debug listener", "port", port, "error", err)
+			os.Exit(1)
+		}
+		debugSrv = &http.Server{Handler: newDebugMux(registry.SnapshotDebugStatuses), ReadHeaderTimeout: 5 * time.Second}
+		debugPort = port
+		go func() {
+			slog.Info("local debug listening", "addr", ln.Addr())
+			if err := debugSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
+				slog.Warn("local debug server stopped", "error", err)
+			}
+		}()
+	}
+
 	closeHealth := func() {
 		if healthSrv != nil {
-			healthSrv.Close()
+			_ = healthSrv.Close()
 			healthSrv = nil
 		}
 		healthPort = 0
 	}
 
+	closeDebug := func() {
+		if debugSrv != nil {
+			_ = debugSrv.Close()
+			debugSrv = nil
+		}
+		debugPort = 0
+	}
+
 	defer closeHealth()
+	defer closeDebug()
 
 	for cfg := initialCfg; ; {
 		if cfg.HealthPort != healthPort {
 			closeHealth()
 			startHealth(cfg.HealthPort)
+		}
+		if cfg.DebugPort != debugPort {
+			closeDebug()
+			startDebug(cfg.DebugPort)
 		}
 
 		nodes := cfg.ExpandNodes()
@@ -137,12 +230,14 @@ func runWithReload(initialCfg *config.Config, configPath string) {
 
 		errCh := make(chan error, len(nodes))
 		var wg sync.WaitGroup
+		services := make([]*service.Service, 0, len(nodes))
 		for _, nodeCfg := range nodes {
 			nodeCfg := nodeCfg
+			svc := service.New(nodeCfg)
+			services = append(services, svc)
 			wg.Add(1)
-			go func() {
+			go func(svc *service.Service) {
 				defer wg.Done()
-				svc := service.New(nodeCfg)
 				if err := svc.Run(ctx); err != nil {
 					slog.Error("node service exited with error",
 						"node_id", nodeCfg.Panel.NodeID, "error", err)
@@ -151,8 +246,9 @@ func runWithReload(initialCfg *config.Config, configPath string) {
 				} else {
 					slog.Info("node service stopped", "node_id", nodeCfg.Panel.NodeID)
 				}
-			}()
+			}(svc)
 		}
+		registry.Set(services)
 
 		doneCh := make(chan struct{})
 		go func() {

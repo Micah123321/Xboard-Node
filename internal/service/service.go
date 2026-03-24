@@ -13,6 +13,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cedar2025/xboard-node/internal/cert"
@@ -58,6 +59,9 @@ type Service struct {
 	wsStatusCh     chan panel.WSStatusChange // receives WS connect/disconnect notifications
 	wsCancel       context.CancelFunc        // cancels the WS client goroutine
 	wsDisconnectAt time.Time                 // when WS last disconnected (zero if connected)
+
+	egressProbeMu   sync.RWMutex
+	lastEgressProbe EgressDialCheckResult
 }
 
 // apiBackoff implements simple exponential backoff for API failures.
@@ -302,6 +306,8 @@ func (s *Service) initialSetup(ctx context.Context) error {
 	// record applied state on success
 	s.appliedState.Config = nodeConfig
 	s.appliedState.Users = users
+	s.logShadowsocksEgressStatus("start")
+	s.triggerShadowsocksEgressProbe("start")
 
 	return nil
 }
@@ -736,6 +742,8 @@ func (s *Service) startKernel(nc *panel.NodeConfig, users []panel.User) bool {
 		"port", nc.ServerPort,
 		"users", len(users),
 	)
+	s.logShadowsocksEgressStatus("start")
+	s.triggerShadowsocksEgressProbe("start")
 	return true
 }
 
@@ -879,6 +887,8 @@ func (s *Service) applyChanges(ctx context.Context, configChanged, usersChanged 
 		} else {
 			s.appliedState.Config = s.lastConfig
 			s.appliedState.Users = s.lastUsers
+			s.logShadowsocksEgressStatus("reload")
+			s.triggerShadowsocksEgressProbe("reload")
 		}
 	} else if !s.kernel.IsRunning() {
 		s.startKernel(s.lastConfig, s.lastUsers)
