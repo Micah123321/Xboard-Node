@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## [0.0.4] - 2026-03-25
+
+### 新增
+
+- **[config]**: 新增最小 `hot-reload` 能力，配置文件变更后会在新配置合法时重启 service 实例，非法配置则保留旧实例继续运行。 — by yinjianm
+  - 方案: [202603250316_minimal-hot-reload](archive/2026-03/202603250316_minimal-hot-reload/)
+
 ## [0.0.3] - 2026-03-25
 
 ### 修复

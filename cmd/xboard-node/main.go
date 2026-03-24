@@ -45,40 +45,21 @@ func main() {
 	// Apply runtime memory tuning before anything else allocates.
 	applyRuntimeConfig(cfg.Runtime)
 
-	nodes := cfg.ExpandNodes()
-	slog.Info("xboard-node starting",
-		"version", version,
-		"build_time", buildTime,
-		"nodes", len(nodes),
-	)
+	runWithReload(cfg, *configPath)
+}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+func runWithReload(initialCfg *config.Config, configPath string) {
+	var healthSrv *http.Server
+	var healthPort int
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		sig := <-sigCh
-		slog.Info("received signal, shutting down gracefully", "signal", sig)
-		cancel()
-
-		// Force-exit on second signal or after timeout.
-		select {
-		case sig = <-sigCh:
-			slog.Warn("received second signal, forcing exit", "signal", sig)
-			os.Exit(1)
-		case <-time.After(15 * time.Second):
-			slog.Error("shutdown timed out after 15s, forcing exit")
-			os.Exit(2)
+	startHealth := func(port int) {
+		if port <= 0 {
+			healthPort = 0
+			return
 		}
-	}()
-
-	// Optional health-check endpoint for container orchestrators.
-	if cfg.HealthPort > 0 {
-		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.HealthPort))
+		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 		if err != nil {
-			slog.Error("failed to start health check listener", "port", cfg.HealthPort, "error", err)
+			slog.Error("failed to start health check listener", "port", port, "error", err)
 			os.Exit(1)
 		}
 		mux := http.NewServeMux()
@@ -87,46 +68,136 @@ func main() {
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"status":"ok"}`))
 		})
-		srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		healthSrv = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		healthPort = port
 		go func() {
 			slog.Info("health check listening", "addr", ln.Addr())
-			if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			if err := healthSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
 				slog.Warn("health check server stopped", "error", err)
 			}
 		}()
-		go func() {
-			<-ctx.Done()
-			srv.Close()
-		}()
 	}
 
-	// Run one service per node. If any node fails, cancel all others.
-	errCh := make(chan error, len(nodes))
-	var wg sync.WaitGroup
-	for _, nodeCfg := range nodes {
-		nodeCfg := nodeCfg // capture
-		wg.Add(1)
+	closeHealth := func() {
+		if healthSrv != nil {
+			healthSrv.Close()
+			healthSrv = nil
+		}
+		healthPort = 0
+	}
+
+	defer closeHealth()
+
+	for cfg := initialCfg; ; {
+		if cfg.HealthPort != healthPort {
+			closeHealth()
+			startHealth(cfg.HealthPort)
+		}
+
+		nodes := cfg.ExpandNodes()
+		slog.Info("xboard-node starting",
+			"version", version,
+			"build_time", buildTime,
+			"nodes", len(nodes),
+		)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		reloadCh := make(chan *config.Config, 1)
+
+		watcher, err := config.WatchConfig(ctx, configPath, func(newCfg *config.Config) {
+			select {
+			case reloadCh <- newCfg:
+			default:
+			}
+		})
+		if err != nil {
+			slog.Warn("config watcher unavailable, hot-reload disabled", "error", err)
+		}
+
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
 		go func() {
-			defer wg.Done()
-			svc := service.New(nodeCfg)
-			if err := svc.Run(ctx); err != nil {
-				slog.Error("node service exited with error",
-					"node_id", nodeCfg.Panel.NodeID, "error", err)
-				errCh <- err
-				cancel() // bring down all other nodes
-			} else {
-				slog.Info("node service stopped", "node_id", nodeCfg.Panel.NodeID)
+			select {
+			case sig := <-sigCh:
+				slog.Info("received signal, shutting down gracefully", "signal", sig)
+				cancel()
+
+				select {
+				case sig = <-sigCh:
+					slog.Warn("received second signal, forcing exit", "signal", sig)
+					os.Exit(1)
+				case <-time.After(15 * time.Second):
+					slog.Error("shutdown timed out after 15s, forcing exit")
+					os.Exit(2)
+				}
+			case <-ctx.Done():
 			}
 		}()
-	}
 
-	wg.Wait()
-	close(errCh)
+		errCh := make(chan error, len(nodes))
+		var wg sync.WaitGroup
+		for _, nodeCfg := range nodes {
+			nodeCfg := nodeCfg
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				svc := service.New(nodeCfg)
+				if err := svc.Run(ctx); err != nil {
+					slog.Error("node service exited with error",
+						"node_id", nodeCfg.Panel.NodeID, "error", err)
+					errCh <- err
+					cancel()
+				} else {
+					slog.Info("node service stopped", "node_id", nodeCfg.Panel.NodeID)
+				}
+			}()
+		}
 
-	if err := <-errCh; err != nil {
-		os.Exit(1)
+		doneCh := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(doneCh)
+		}()
+
+		var newCfg *config.Config
+		select {
+		case newCfg = <-reloadCh:
+			slog.Info("config changed, restarting services")
+			cancel()
+			<-doneCh
+		case <-doneCh:
+		}
+
+		signal.Stop(sigCh)
+		if watcher != nil {
+			watcher.Stop()
+		}
+		cancel()
+
+		if newCfg == nil {
+			close(errCh)
+			if err := firstError(errCh); err != nil {
+				os.Exit(1)
+			}
+			slog.Info("xboard-node stopped")
+			return
+		}
+
+		config.InitLogger(newCfg.Log)
+		applyRuntimeConfig(newCfg.Runtime)
+		cfg = newCfg
+		slog.Info("reload complete, services restarting with new config")
 	}
-	slog.Info("xboard-node stopped")
+}
+
+func firstError(errCh <-chan error) error {
+	for err := range errCh {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // applyRuntimeConfig wires up Go runtime memory limits from the config file.

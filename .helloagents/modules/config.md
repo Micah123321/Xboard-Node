@@ -10,3 +10,5 @@
 - `kernel.egress.socks5` 与 `kernel.egress.shadowsocks` 互斥
 - `kernel.egress.shadowsocks` 支持传统 Shadowsocks 与 `2022-blake3-*`
 - `2022-blake3-*` 出站密码支持单 key 与 `<server_key>:<user_key>` 两种格式
+- 新增最小 `hot-reload` watcher，配置文件变化后仅在新配置可成功 `Load()` 时才触发重启
+- 若变更后的配置非法，watcher 只记录错误并保持当前实例继续运行
