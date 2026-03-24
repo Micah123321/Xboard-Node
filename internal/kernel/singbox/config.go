@@ -557,6 +557,12 @@ func buildTrojan(base M, nc *panel.NodeConfig, users []panel.User, certFile, key
 	} else if nc.TLS == 2 {
 		base["tls"] = buildRealityConfig(nc)
 	}
+
+	// Trojan requires TLS or Reality. If the panel omitted the flag, still
+	// generate a default TLS block so the inbound remains startable.
+	if _, ok := base["tls"]; !ok {
+		base["tls"] = buildTLSConfig(nc, certFile, keyFile)
+	}
 	return base
 }
 
@@ -732,6 +738,8 @@ func applyTransport(base M, nc *panel.NodeConfig) {
 			}
 		case "grpc":
 			if v, ok := nc.NetworkSettings["service_name"]; ok {
+				transport["service_name"] = v
+			} else if v, ok := nc.NetworkSettings["serviceName"]; ok {
 				transport["service_name"] = v
 			}
 		case "httpupgrade":

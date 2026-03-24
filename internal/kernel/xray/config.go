@@ -371,19 +371,32 @@ func buildTrojan(base M, nc *panel.NodeConfig, users []panel.User, certFile, key
 	base["settings"] = M{"clients": clients}
 
 	applyStreamSettings(base, nc, certFile, keyFile)
+
+	// Trojan requires TLS or Reality. If the panel omitted the flag, reapply
+	// stream settings with TLS enabled so the inbound stays compatible.
+	ss, _ := base["streamSettings"].(M)
+	if security, ok := ss["security"].(string); !ok || (security != "tls" && security != "reality") {
+		fallback := *nc
+		fallback.TLS = 1
+		applyStreamSettings(base, &fallback, certFile, keyFile)
+	}
 	return base
 }
 
 func buildShadowsocks(base M, nc *panel.NodeConfig, users []panel.User) M {
-	// Single-user mode for traditional ciphers
 	if !strings.HasPrefix(nc.Cipher, "2022-blake3-") {
-		if len(users) > 0 {
-			base["settings"] = M{
+		clients := make([]M, 0, len(users))
+		for _, u := range users {
+			clients = append(clients, M{
 				"method":   nc.Cipher,
-				"password": users[0].UUID,
-				"email":    userEmail(users[0].ID),
-				"network":  "tcp,udp",
-			}
+				"password": u.UUID,
+				"email":    userEmail(u.ID),
+			})
+		}
+		base["settings"] = M{
+			"method":  nc.Cipher,
+			"clients": clients,
+			"network": "tcp,udp",
 		}
 		return base
 	}
@@ -481,6 +494,8 @@ func applyStreamSettings(base M, nc *panel.NodeConfig, certFile, keyFile string)
 		grpcSettings := M{}
 		if nc.NetworkSettings != nil {
 			if v, ok := nc.NetworkSettings["service_name"]; ok {
+				grpcSettings["serviceName"] = v
+			} else if v, ok := nc.NetworkSettings["serviceName"]; ok {
 				grpcSettings["serviceName"] = v
 			}
 		}

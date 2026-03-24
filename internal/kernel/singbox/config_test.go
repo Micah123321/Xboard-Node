@@ -122,6 +122,21 @@ func TestBuildInbound_VMess_WithGRPC(t *testing.T) {
 	assertMapValue(t, transport, "service_name", "mygrpc")
 }
 
+func TestBuildInbound_VMess_WithGRPCCamelCaseServiceName(t *testing.T) {
+	nc := &panel.NodeConfig{
+		Protocol:   "vmess",
+		ServerPort: 443,
+		Network:    "grpc",
+		NetworkSettings: map[string]interface{}{
+			"serviceName": "camel-grpc",
+		},
+	}
+	inbound := buildInbound(nc, testUsers, "", "")
+	transport := inbound["transport"].(M)
+	assertMapValue(t, transport, "type", "grpc")
+	assertMapValue(t, transport, "service_name", "camel-grpc")
+}
+
 func TestBuildInbound_VMess_WithH2(t *testing.T) {
 	nc := &panel.NodeConfig{
 		Protocol:   "vmess",
@@ -245,9 +260,11 @@ func TestBuildInbound_Trojan_NoTLS(t *testing.T) {
 		TLS:        0,
 	}
 	inbound := buildInbound(nc, testUsers, "", "")
-	if _, exists := inbound["tls"]; exists {
-		t.Error("trojan with tls=0 should not have TLS config")
+	tls, exists := inbound["tls"].(M)
+	if !exists {
+		t.Fatal("trojan with tls=0 should still get TLS")
 	}
+	assertMapValue(t, tls, "enabled", true)
 }
 
 func TestBuildInbound_Trojan_WithTLS(t *testing.T) {

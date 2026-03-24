@@ -188,6 +188,70 @@ func TestBuildConfig_WithShadowsocks2022Proxy(t *testing.T) {
 	t.Fatal("expected generated Shadowsocks 2022 outbound")
 }
 
+func TestBuildConfig_Shadowsocks_MultiUserTraditional(t *testing.T) {
+	nc := panel.NodeConfig{
+		Protocol:   "shadowsocks",
+		ServerPort: 8388,
+		Cipher:     "aes-128-gcm",
+	}
+	cfg := buildConfig(testKernelCfg, &nc, testUsers, "", "")
+	data, _ := json.Marshal(cfg)
+
+	var parsed map[string]interface{}
+	json.Unmarshal(data, &parsed)
+
+	inbounds := parsed["inbounds"].([]interface{})
+	ib := inbounds[0].(map[string]interface{})
+	settings := ib["settings"].(map[string]interface{})
+
+	if settings["method"] != "aes-128-gcm" {
+		t.Errorf("expected method aes-128-gcm, got %v", settings["method"])
+	}
+	clients := settings["clients"].([]interface{})
+	if len(clients) != len(testUsers) {
+		t.Fatalf("expected %d clients, got %d", len(testUsers), len(clients))
+	}
+	c0 := clients[0].(map[string]interface{})
+	if c0["method"] != "aes-128-gcm" {
+		t.Errorf("expected per-user method aes-128-gcm, got %v", c0["method"])
+	}
+	if c0["password"] != testUsers[0].UUID {
+		t.Errorf("expected password %s, got %v", testUsers[0].UUID, c0["password"])
+	}
+}
+
+func TestBuildInbound_Trojan_NoTLSForceEnableTLS(t *testing.T) {
+	nc := panel.NodeConfig{
+		Protocol:   "trojan",
+		ServerPort: 443,
+		Network:    "grpc",
+		TLS:        0,
+	}
+	inbound := buildInbound(&nc, testUsers, "", "")
+	streamSettings := inbound["streamSettings"].(M)
+	if streamSettings["security"] != "tls" {
+		t.Fatalf("expected trojan fallback security tls, got %v", streamSettings["security"])
+	}
+}
+
+func TestBuildInbound_Trojan_WithGRPCCamelCaseServiceName(t *testing.T) {
+	nc := panel.NodeConfig{
+		Protocol:   "trojan",
+		ServerPort: 443,
+		Network:    "grpc",
+		TLS:        1,
+		NetworkSettings: map[string]interface{}{
+			"serviceName": "trojan-grpc",
+		},
+	}
+	inbound := buildInbound(&nc, testUsers, "", "")
+	streamSettings := inbound["streamSettings"].(M)
+	grpcSettings := streamSettings["grpcSettings"].(M)
+	if grpcSettings["serviceName"] != "trojan-grpc" {
+		t.Fatalf("expected grpc serviceName trojan-grpc, got %v", grpcSettings["serviceName"])
+	}
+}
+
 func TestBuildConfig_AllProtocols_ValidJSON(t *testing.T) {
 	protocols := []struct {
 		name string
@@ -516,31 +580,6 @@ func TestBuildConfig_StatsEnabled(t *testing.T) {
 	}
 	if v, ok := level0["statsUserDownlink"]; !ok || v != true {
 		t.Error("statsUserDownlink not enabled")
-	}
-}
-
-func TestBuildConfig_Shadowsocks_SingleUser(t *testing.T) {
-	nc := panel.NodeConfig{
-		Protocol:   "shadowsocks",
-		ServerPort: 8388,
-		Cipher:     "aes-128-gcm",
-	}
-	cfg := buildConfig(testKernelCfg, &nc, testUsers, "", "")
-	data, _ := json.Marshal(cfg)
-
-	var parsed map[string]interface{}
-	json.Unmarshal(data, &parsed)
-
-	inbounds := parsed["inbounds"].([]interface{})
-	ib := inbounds[0].(map[string]interface{})
-	settings := ib["settings"].(map[string]interface{})
-
-	// Single-user mode: password directly, no clients array
-	if settings["method"] != "aes-128-gcm" {
-		t.Errorf("expected method aes-128-gcm, got %v", settings["method"])
-	}
-	if settings["password"] != testUsers[0].UUID {
-		t.Errorf("expected password %s, got %v", testUsers[0].UUID, settings["password"])
 	}
 }
 

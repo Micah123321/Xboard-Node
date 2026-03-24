@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## [0.0.3] - 2026-03-25
+
+### 修复
+
+- **[kernel]**: 选择性吸收上游 `Shadowsocks` / `Trojan` 协议兼容性修复，补齐 `xray` 传统 Shadowsocks 多用户结构、`singbox/xray` Trojan TLS 兜底，以及 `grpc serviceName` 兼容。 — by yinjianm
+  - 方案: [202603250302_merge-upstream-compat-fixes](archive/2026-03/202603250302_merge-upstream-compat-fixes/)
+
 ## [0.0.2] - 2026-03-25
 
 ### 新增
