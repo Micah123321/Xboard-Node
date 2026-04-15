@@ -118,6 +118,18 @@ is_acme_mode() {
     esac
 }
 
+is_http_cert_mode() {
+    [ "$(effective_cert_mode)" = "http" ]
+}
+
+effective_cert_http_port() {
+    if [ -n "$CERT_HTTP_PORT" ]; then
+        printf '%s' "$CERT_HTTP_PORT"
+        return
+    fi
+    printf '80'
+}
+
 cert_file_path() {
     local node_id="$1"
     printf '%s/%s/certs/%s.crt' "$CONFIG_DIR" "$node_id" "$CERT_DOMAIN"
@@ -297,6 +309,65 @@ wait_for_cert_result() {
     return 1
 }
 
+detect_local_tcp_listener() {
+    local port="$1"
+
+    if [ -z "$port" ]; then
+        printf 'unknown'
+        return
+    fi
+
+    if command -v ss >/dev/null 2>&1; then
+        if ss -ltnH "( sport = :${port} )" 2>/dev/null | grep -q .; then
+            printf 'listening'
+            return
+        fi
+        printf 'not_listening'
+        return
+    fi
+
+    if command -v netstat >/dev/null 2>&1; then
+        if netstat -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "(^|[[:space:]])[^[:space:]]*:${port}$"; then
+            printf 'listening'
+            return
+        fi
+        printf 'not_listening'
+        return
+    fi
+
+    printf 'unknown'
+}
+
+print_http01_listener_hint() {
+    local port=""
+    local listener_status=""
+
+    if ! is_http_cert_mode || [ -z "$CERT_DOMAIN" ]; then
+        return 0
+    fi
+
+    port="$(effective_cert_http_port)"
+    listener_status="$(detect_local_tcp_listener "$port")"
+
+    case "$listener_status" in
+        listening)
+            echo "    本地监听:  已检测到 :${port}"
+            ;;
+        not_listening)
+            echo "    本地监听:  暂未检测到 :${port}"
+            ;;
+        *)
+            echo "    本地监听:  当前环境无法自动检测"
+            ;;
+    esac
+
+    if [ "$port" = "80" ]; then
+        echo "    端口要求:  ACME HTTP-01 仍通过公网 80 校验，请确保 ${CERT_DOMAIN}:80 可被公网访问"
+    else
+        echo "    端口要求:  ACME HTTP-01 仍通过公网 80 校验，请确保公网 80 已转发到本机 ${port}"
+    fi
+}
+
 print_cert_status_hint() {
     local node_id="$1"
     local cert_file=""
@@ -314,6 +385,9 @@ print_cert_status_hint() {
         echo "    结果:      已成功写入证书文件"
         echo "    cert:      ${cert_file}"
         echo "    key:       ${key_file}"
+        if is_http_cert_mode; then
+            print_http01_listener_hint
+        fi
         return 0
     fi
 
@@ -329,6 +403,13 @@ print_cert_status_hint() {
             echo "    服务状态:  systemctl status xboard-node@${node_id}"
         fi
         echo "    排查日志:  journalctl -u xboard-node@${node_id} -n 50 --no-pager"
+    fi
+    if is_http_cert_mode; then
+        print_http01_listener_hint
+        echo "    手动检查:  ss -ltn | grep ':$(effective_cert_http_port) '"
+        echo "    外网检查:  确保 ${CERT_DOMAIN}:80 可达；若使用 --cert-http-port，则确认 80 已转发到该端口"
+        echo "    常见原因:  域名未解析到本机、80 端口不可达、80 未转发到本地监听端口"
+        return 0
     fi
     echo "    常见原因:  域名未解析到本机、80 端口不可达、DNS Provider 凭据错误"
 }
@@ -598,7 +679,7 @@ prompt_cert_settings() {
                 read -rp "  ACME 邮箱 (可选，留空跳过): " CERT_EMAIL
             fi
             if [ -z "$CERT_HTTP_PORT" ]; then
-                read -rp "  HTTP-01 验证端口 (默认 80): " CERT_HTTP_PORT
+                read -rp "  HTTP-01 本地监听端口 (默认 80；公网仍需 80 可达): " CERT_HTTP_PORT
             fi
             ;;
         dns)
@@ -1237,11 +1318,21 @@ deploy_node() {
     echo ""
     if has_cert_inputs; then
         local cert_mode_resolved
+        local cert_http_port=""
         cert_mode_resolved="$(effective_cert_mode)"
         echo "  证书策略: $(cert_mode_label "$cert_mode_resolved")"
         [ -n "$CERT_DOMAIN" ] && echo "    域名:      ${CERT_DOMAIN}"
         [ -n "$CERT_EMAIL" ] && echo "    邮箱:      ${CERT_EMAIL}"
         [ -n "$CERT_DNS_PROVIDER" ] && echo "    Provider:  ${CERT_DNS_PROVIDER}"
+        if is_http_cert_mode; then
+            cert_http_port="$(effective_cert_http_port)"
+            echo "    本地监听:  ${cert_http_port}"
+            if [ "$cert_http_port" = "80" ]; then
+                echo "    公网校验:  ACME HTTP-01 需要 ${CERT_DOMAIN}:80 可被公网访问"
+            else
+                echo "    公网校验:  ACME HTTP-01 仍走公网 80，请确保 80 已转发到本机 ${cert_http_port}"
+            fi
+        fi
         is_acme_mode && echo "    首次申请:  服务启动后自动触发"
     else
         echo "  证书策略: 未显式配置；若协议需要 TLS，将自动回退为自签证书"
@@ -1448,7 +1539,7 @@ print_help() {
         --cert-mode    证书模式          (http、dns、self、none)
         --cert-domain  证书域名          (ACME 必填；仅传域名时默认走 HTTP-01)
         --cert-email   ACME 邮箱         (可选，推荐)
-        --cert-http-port HTTP-01 端口    (默认 80)
+        --cert-http-port HTTP-01 本地监听端口 (默认 80；公网仍需 80 可达)
         --cert-dns-provider DNS Provider (cloudflare 或 alidns)
         --cert-dns-env DNS 凭据          (可重复传入，格式 KEY=VALUE)
         --docker       使用 Docker 部署  (默认不开启)

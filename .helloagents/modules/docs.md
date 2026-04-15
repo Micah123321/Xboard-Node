@@ -9,3 +9,4 @@
 
 - README 已补充 `kernel.egress.shadowsocks` 的使用说明
 - 示例配置已包含传统 SS 与 SS2022 两种写法
+- README 与 `config.yml.example` 已明确区分 ACME HTTP-01 的“公网 80 校验”与 `cert.http_port` 的“本地监听端口”语义

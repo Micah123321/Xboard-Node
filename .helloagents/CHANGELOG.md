@@ -4,6 +4,10 @@
 
 ### 快速修复
 
+- **[install/docs]**: `install.sh` 现在会明确区分 ACME HTTP-01 的公网 `80` 校验与 `--cert-http-port` 的本地监听语义；当使用自定义本地监听端口时，部署结果与证书排障输出会明确提示“公网 80 仍需转发到该端口”。 — by yinjianm
+  - 方案: [202604152142_install-http01-preflight](archive/2026-04/202604152142_install-http01-preflight/)
+  - 决策: install-http01-preflight#D001(不伪造任意公网端口 HTTP-01，改为增强预检与提示)
+
 - **[install]**: `install.sh` 在 `singbox + --egress-shadowsocks-uri` 场景下新增启动后默认出站健康检查；若日志出现 `shadowsocks egress probe failed`，部署会直接判失败、输出排查命令，并保留节点配置与服务现场。 — by yinjianm
   - 类型: 快速修复（安装阶段 SS 默认出站失败收口）
   - 文件: install.sh, README.md

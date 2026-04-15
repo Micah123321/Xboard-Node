@@ -77,6 +77,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs
 
 - 仅传 `--cert-domain` 时，安装脚本会默认写入 `cert_mode: "http"`
 - 你需要保证域名已经解析到当前服务器，且公网可以访问 `80` 端口
+- `--cert-http-port` 只用于修改节点在本机上的 HTTP-01 监听端口，不会让 ACME 改去访问别的公网端口
+- 如果你传了 `--cert-http-port 8080`，实际要求仍然是“公网 `80` 能访问，并且已转发到本机 `8080`”
 
 使用 ACME DNS-01：
 
