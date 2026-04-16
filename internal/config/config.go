@@ -259,6 +259,27 @@ func (c *Config) setDefaults() {
 	if c.Cert.HTTPPort == 0 {
 		c.Cert.HTTPPort = 80
 	}
+	if c.Node.TrackInterval == 0 {
+		c.Node.TrackInterval = 10
+	}
+	if c.Node.DeviceReportInterval == 0 {
+		c.Node.DeviceReportInterval = 30
+	}
+	if c.WS.StatusInterval == 0 {
+		c.WS.StatusInterval = 10
+	}
+	if c.WS.HandshakeTimeout == 0 {
+		c.WS.HandshakeTimeout = 15
+	}
+	if c.WS.BackoffInitial == 0 {
+		c.WS.BackoffInitial = 1
+	}
+	if c.WS.BackoffMax == 0 {
+		c.WS.BackoffMax = 60
+	}
+	if c.WS.DiscoveryInterval == 0 {
+		c.WS.DiscoveryInterval = 300
+	}
 	c.Kernel.Egress.setDefaults()
 }
 
@@ -300,6 +321,27 @@ func (c *Config) validate() error {
 	}
 	if c.Node.PullInterval < 0 {
 		return fmt.Errorf("node.pull_interval must not be negative")
+	}
+	if c.Node.TrackInterval < 0 {
+		return fmt.Errorf("node.track_interval must not be negative")
+	}
+	if c.Node.DeviceReportInterval < 0 {
+		return fmt.Errorf("node.device_report_interval must not be negative")
+	}
+	if c.WS.StatusInterval < 0 {
+		return fmt.Errorf("ws.status_interval must not be negative")
+	}
+	if c.WS.HandshakeTimeout < 0 {
+		return fmt.Errorf("ws.handshake_timeout must not be negative")
+	}
+	if c.WS.BackoffInitial < 0 {
+		return fmt.Errorf("ws.backoff_initial must not be negative")
+	}
+	if c.WS.BackoffMax < 0 {
+		return fmt.Errorf("ws.backoff_max must not be negative")
+	}
+	if c.WS.DiscoveryInterval < 0 {
+		return fmt.Errorf("ws.discovery_interval must not be negative")
 	}
 	if c.DebugPort < 0 {
 		return fmt.Errorf("debug_port must not be negative")

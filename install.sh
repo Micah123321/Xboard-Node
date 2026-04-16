@@ -887,7 +887,7 @@ install_systemd_template() {
 
     log_step "安装 systemd 服务模板..."
 
-    cat > "/etc/systemd/system/${SERVICE_TEMPLATE}" << 'UNIT'
+    cat > "/etc/systemd/system/${SERVICE_TEMPLATE}" <<UNIT
 [Unit]
 Description=Mi Node Backend (node %i)
 Documentation=${REPO_URL}

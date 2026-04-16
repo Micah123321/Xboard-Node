@@ -95,6 +95,13 @@ type apiBackoff struct {
 	skipRemaining int
 }
 
+func positiveSecondsOrDefault(v, fallback int) time.Duration {
+	if v <= 0 {
+		v = fallback
+	}
+	return time.Duration(v) * time.Second
+}
+
 func (b *apiBackoff) shouldSkip() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -175,17 +182,17 @@ func (s *Service) Run(ctx context.Context) error {
 
 
 	// Set up tickers
-	trackTicker := time.NewTicker(time.Duration(s.cfg.Node.TrackInterval) * time.Second)
+	trackTicker := time.NewTicker(positiveSecondsOrDefault(s.cfg.Node.TrackInterval, 10))
 	pushInterval := time.Duration(math.Max(float64(s.pushInterval), 5)) * time.Second
-	pullInterval := time.Duration(s.pullInterval) * time.Second
+	pullInterval := positiveSecondsOrDefault(s.pullInterval, 60)
 	reportTicker := time.NewTicker(pushInterval)
 	pullTicker := time.NewTicker(pullInterval)
-	deviceReportTicker := time.NewTicker(time.Duration(s.cfg.Node.DeviceReportInterval) * time.Second)
+	deviceReportTicker := time.NewTicker(positiveSecondsOrDefault(s.cfg.Node.DeviceReportInterval, 30))
 
 	// WS discovery: when in REST-only mode, periodically re-handshake to check
 	// if WS has been enabled. When WS is disconnected for too long, re-check
 	// if it's still available.
-	wsDiscoveryTicker := time.NewTicker(time.Duration(s.cfg.WS.DiscoveryInterval) * time.Second)
+	wsDiscoveryTicker := time.NewTicker(positiveSecondsOrDefault(s.cfg.WS.DiscoveryInterval, 300))
 
 	defer trackTicker.Stop()
 	defer reportTicker.Stop()

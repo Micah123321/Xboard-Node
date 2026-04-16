@@ -395,6 +395,58 @@ node:
 	}
 }
 
+func TestLoad_DefaultTickerIntervals(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Node.TrackInterval != 10 {
+		t.Fatalf("track_interval: got %d, want 10", cfg.Node.TrackInterval)
+	}
+	if cfg.Node.DeviceReportInterval != 30 {
+		t.Fatalf("device_report_interval: got %d, want 30", cfg.Node.DeviceReportInterval)
+	}
+	if cfg.WS.StatusInterval != 10 {
+		t.Fatalf("ws.status_interval: got %d, want 10", cfg.WS.StatusInterval)
+	}
+	if cfg.WS.HandshakeTimeout != 15 {
+		t.Fatalf("ws.handshake_timeout: got %d, want 15", cfg.WS.HandshakeTimeout)
+	}
+	if cfg.WS.BackoffInitial != 1 {
+		t.Fatalf("ws.backoff_initial: got %d, want 1", cfg.WS.BackoffInitial)
+	}
+	if cfg.WS.BackoffMax != 60 {
+		t.Fatalf("ws.backoff_max: got %d, want 60", cfg.WS.BackoffMax)
+	}
+	if cfg.WS.DiscoveryInterval != 300 {
+		t.Fatalf("ws.discovery_interval: got %d, want 300", cfg.WS.DiscoveryInterval)
+	}
+}
+
+func TestLoad_NegativeTickerIntervals(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+node:
+  track_interval: -1
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for negative track_interval")
+	}
+	if !strings.Contains(err.Error(), "node.track_interval must not be negative") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestLoad_DebugPort(t *testing.T) {
 	path := writeTemp(t, `
 panel:
