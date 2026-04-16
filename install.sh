@@ -6,6 +6,7 @@ set -e
 #
 # 本机一键部署（默认，不带 --docker）:
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 1
+#   bash install.sh --binary-url https://github.com/Micah123321/mi-node/releases/download/dev/xboard-node-linux-amd64 -a https://panel.example.com -t YOUR_TOKEN -n 1
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 2 -k xray
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 3 --gomemlimit 256MiB --gogc 50
 #   bash install.sh -a https://panel.example.com -t YOUR_TOKEN -n 3 --egress-socks5 127.0.0.1:1080
@@ -44,6 +45,7 @@ RELEASES_BASE_URL="${REPO_URL}/releases"
 DOCKER_IMAGE="${MI_NODE_DOCKER_IMAGE:-ghcr.io/micah123321/mi-node:latest}"
 CERT_WAIT_SECONDS=15
 EGRESS_PROBE_WAIT_SECONDS=15
+BINARY_URL="${MI_NODE_BINARY_URL:-}"
 
 # 解析后的参数
 PANEL_URL=""
@@ -492,6 +494,7 @@ parse_args() {
             -k|--kernel)     KERNEL_TYPE="$2";    shift 2 ;;
             --gomemlimit)    GOMEMLIMIT="$2";     shift 2 ;;
             --gogc)          GOGC="$2";           shift 2 ;;
+            --binary-url)    BINARY_URL="$2";     shift 2 ;;
             --egress-socks5) EGRESS_SOCKS5="$2";  shift 2 ;;
             --egress-socks5-user) EGRESS_SOCKS5_USER="$2"; shift 2 ;;
             --egress-socks5-pass) EGRESS_SOCKS5_PASS="$2"; shift 2 ;;
@@ -835,6 +838,36 @@ download_release_asset() {
     return 1
 }
 
+download_release_asset_compatible() {
+    local dest="$1"
+    shift
+
+    local asset_name=""
+    for asset_name in "$@"; do
+        if download_release_asset "$asset_name" "$dest"; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+download_binary_url() {
+    local url="$1"
+    local dest="$2"
+    local tmp=""
+
+    tmp="$(mktemp)"
+    log_info "尝试下载指定二进制: ${url}"
+    if wget -q "$url" -O "$tmp" 2>/dev/null || curl -fsSL "$url" -o "$tmp" 2>/dev/null; then
+        mv "$tmp" "$dest"
+        return 0
+    fi
+
+    rm -f "$tmp"
+    return 1
+}
+
 # ─── 二进制安装 ──────────────────────────────────────────────────────
 
 is_binary_installed() {
@@ -855,14 +888,28 @@ install_binary() {
         src="./mi-node"
     elif [ -f "./mi-node-linux-${ARCH}" ]; then
         src="./mi-node-linux-${ARCH}"
+    elif [ -f "./xboard-node" ]; then
+        src="./xboard-node"
+    elif [ -f "./xboard-node-linux-${ARCH}" ]; then
+        src="./xboard-node-linux-${ARCH}"
     fi
 
     if [ -n "$src" ]; then
         cp "$src" "${INSTALL_DIR}/mi-node"
         log_info "已从本地文件安装: $src"
+    elif [ -n "$BINARY_URL" ]; then
+        log_info "正在从指定地址下载二进制"
+        if download_binary_url "$BINARY_URL" "${INSTALL_DIR}/mi-node"; then
+            log_info "下载完成"
+        else
+            log_error "指定二进制下载失败: ${BINARY_URL}"
+            exit 1
+        fi
     else
         log_info "正在从当前仓库 Releases 下载: ${REPO_URL}"
-        if download_release_asset "mi-node-linux-${ARCH}" "${INSTALL_DIR}/mi-node"; then
+        if download_release_asset_compatible "${INSTALL_DIR}/mi-node" \
+            "mi-node-linux-${ARCH}" \
+            "xboard-node-linux-${ARCH}"; then
             log_info "下载完成"
         else
             log_error "下载失败。请先将对应架构的二进制放到当前目录后重试。"
@@ -1438,15 +1485,30 @@ update_binary() {
 
     local tmp="/tmp/mi-node-update"
 
-    log_info "正在从当前仓库 Releases 更新: ${REPO_URL}"
-    if download_release_asset "mi-node-linux-${ARCH}" "$tmp"; then
-        chmod +x "$tmp"
-        mv "$tmp" "${INSTALL_DIR}/mi-node"
-        log_info "二进制更新完成"
+    if [ -n "$BINARY_URL" ]; then
+        log_info "正在从指定地址更新二进制"
+        if download_binary_url "$BINARY_URL" "$tmp"; then
+            chmod +x "$tmp"
+            mv "$tmp" "${INSTALL_DIR}/mi-node"
+            log_info "二进制更新完成"
+        else
+            log_error "指定二进制下载失败: ${BINARY_URL}"
+            rm -f "$tmp"
+            exit 1
+        fi
     else
-        log_error "更新下载失败"
-        rm -f "$tmp"
-        exit 1
+        log_info "正在从当前仓库 Releases 更新: ${REPO_URL}"
+        if download_release_asset_compatible "$tmp" \
+            "mi-node-linux-${ARCH}" \
+            "xboard-node-linux-${ARCH}"; then
+            chmod +x "$tmp"
+            mv "$tmp" "${INSTALL_DIR}/mi-node"
+            log_info "二进制更新完成"
+        else
+            log_error "更新下载失败"
+            rm -f "$tmp"
+            exit 1
+        fi
     fi
 
     if command -v systemctl >/dev/null 2>&1; then
@@ -1518,7 +1580,7 @@ print_help() {
 
   本机部署（默认，推荐，适合减少 Docker 内存占用）:
 
-    install.sh -a <url> -t <token> -n <node_id> [-T <node_type>] [-k singbox|xray] [--gomemlimit 256MiB] [--gogc 50] [--egress-socks5 127.0.0.1:1080] [--egress-shadowsocks-uri 'ss://...'] [--cert-domain node.example.com]
+    install.sh -a <url> -t <token> -n <node_id> [-T <node_type>] [-k singbox|xray] [--binary-url <url>] [--gomemlimit 256MiB] [--gogc 50] [--egress-socks5 127.0.0.1:1080] [--egress-shadowsocks-uri 'ss://...'] [--cert-domain node.example.com]
 
   Docker 部署:
 
@@ -1530,6 +1592,7 @@ print_help() {
     -n, --node-id      节点 ID           (正整数)
     -T, --node-type    节点类型          (可选，可由面板自动识别)
     -k, --kernel       内核类型          (singbox 或 xray，默认: singbox)
+        --binary-url   指定二进制 URL    (可直接安装旧版本)
         --gomemlimit   Go 内存软上限     (例如 256MiB、512MiB)
         --gogc         Go GC 百分比      (例如 50、100)
         --egress-socks5 默认 SOCKS5 出站 (格式 host:port 或 [ipv6]:port)
@@ -1551,6 +1614,9 @@ print_help() {
 
     # 本机部署节点 2（xray）并限制内存
     bash install.sh -a https://panel.example.com -t mytoken123 -n 2 -k xray --gomemlimit 256MiB --gogc 50
+
+    # 直接安装指定旧版本二进制
+    bash install.sh --binary-url https://github.com/Micah123321/mi-node/releases/download/dev/xboard-node-linux-amd64 -a https://panel.example.com -t mytoken123 -n 2
 
     # 本机部署节点 3，所有默认出站经 SOCKS5 转发
     bash install.sh -a https://panel.example.com -t mytoken123 -n 3 --egress-socks5 127.0.0.1:1080
