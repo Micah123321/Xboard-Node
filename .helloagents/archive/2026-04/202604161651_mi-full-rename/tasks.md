@@ -30,7 +30,7 @@
 
 ### 3. 安装与运行时标识
 
-- [√] 3.1 修改 `install.sh`、`config.yml.example`，统一安装目录、systemd 模板、容器名、镜像默认值和运维提示为 `mi-node`，并保留当前有效发布源 `Micah123321/Xboard-Node` | depends_on: [2.1]
+- [√] 3.1 修改 `install.sh`、`config.yml.example`，统一安装目录、systemd 模板、容器名、镜像默认值和运维提示为 `mi-node`；当时有效发布源仍为旧仓名 | depends_on: [2.1]
 
 ### 4. 文档、知识库与验证
 
@@ -51,4 +51,4 @@
 
 ## 执行备注
 
-> 本轮保留当前有效发布源仓库 slug `Micah123321/Xboard-Node`，但仓内源码、产物、安装与运行命名全部切换到 `mi-node`，并将源码模块路径提前对齐到未来仓名 `github.com/micah123321/mi-node`。
+> 本轮当时保留有效发布源仓库 slug 为旧仓名，但仓内源码、产物、安装与运行命名全部切换到 `mi-node`，并将源码模块路径提前对齐到未来仓名 `github.com/micah123321/mi-node`。后续发布源已再切换到 `Micah123321/mi-node`。

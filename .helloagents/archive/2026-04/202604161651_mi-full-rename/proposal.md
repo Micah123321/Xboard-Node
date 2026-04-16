@@ -25,13 +25,13 @@
 ```yaml
 时间约束: 本轮直接完成实现与基础验证
 性能约束: 不引入额外运行时开销，仅做命名与路径重构
-兼容性约束: 仓库远端 slug 当前仍为 Micah123321/Xboard-Node，本轮不改 GitHub 仓库名
+兼容性约束: 当时仓库远端 slug 仍为旧仓名，本轮不改 GitHub 仓库名
 业务约束: 用户明确要求全量替换，不采用“仅展示名”或“仅运行时名”的保守方案
 ```
 
 ### 验收标准
 - [x] Go module path、源码 import、入口目录、构建产物、Docker entrypoint、安装目录、systemd 服务名、容器名和 CI artifact 全部切换到 `mi-node`
-- [x] `install.sh` 与 `README.md` 的安装、更新、排障示例不再使用 `xboard-node` 作为运行名；当前仓库 Raw / Release 源仍指向尚未改名的 `Xboard-Node`
+- [x] `install.sh` 与 `README.md` 的安装、更新、排障示例不再使用 `xboard-node` 作为运行名；后续仓库源已进一步切换到 `Micah123321/mi-node`
 - [x] `go test ./...`、当前平台构建与 Linux amd64/arm64 交叉编译通过，全文扫描仅保留当前实际仓库发布源 `Xboard-Node`
 
 ---
@@ -116,10 +116,10 @@ flowchart TD
 **理由**: 用户已明确确认全量替换，且本轮目标是品牌与运行标识的彻底收口，优先满足结果一致性。
 **影响**: 影响源码路径、构建脚本、CI 发布链、安装脚本、运维命令与文档。
 
-### mi-full-rename#D002: 保留当前发布源仓库 slug `Xboard-Node`，但源码模块路径切到 `mi-node`
+### mi-full-rename#D002: 当时保留发布源仓库 slug `Xboard-Node`，但源码模块路径先切到 `mi-node`
 **日期**: 2026-04-16
 **状态**: ✅采纳
-**背景**: 当前仓库远端仍为 `Micah123321/Xboard-Node`，但用户已经明确后续仓名会改成 `mi-node`，因此源码模块路径需要提前对齐到未来名称。
+**背景**: 当时仓库远端仍为旧仓名，但用户已经明确后续仓名会改成 `mi-node`，因此源码模块路径需要提前对齐到未来名称。
 **选项分析**:
 | 选项 | 优点 | 缺点 |
 |------|------|------|

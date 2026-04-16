@@ -4,7 +4,11 @@
 
 ### 快速修复
 
-- **[rename/build/install/docs]**: 仓内项目命名已从 `xboard-node` 全量切换到 `mi-node`；Go module path 现为 `github.com/micah123321/mi-node`，入口目录改为 `cmd/mi-node`，编译产物、Docker 镜像、安装目录、systemd 服务名、容器名与 CI artifact 全部同步为 `mi-node`。当前 GitHub 发布源仓库仍保留 `Micah123321/Xboard-Node`，待远端仓名变更后再同步切换安装源。 — by yinjianm
+- **[repo/docs/kb]**: GitHub 发布源仓库已从旧仓名切换到 `Micah123321/mi-node`，`origin`、README Raw 地址、`install.sh` 默认发布源和 `.helloagents` 当前态路径说明已同步更新；本地工作目录已切换到 `E:\code\go\mi-node`。 — by yinjianm
+  - 方案: [202604161713_repo-folder-rename-to-mi-node](archive/2026-04/202604161713_repo-folder-rename-to-mi-node/)
+  - 决策: repo-folder-rename-to-mi-node#D001(立即同步本地目录与发布源到 mi-node)
+
+- **[rename/build/install/docs]**: 仓内项目命名已从 `xboard-node` 全量切换到 `mi-node`；Go module path 现为 `github.com/micah123321/mi-node`，入口目录改为 `cmd/mi-node`，编译产物、Docker 镜像、安装目录、systemd 服务名、容器名与 CI artifact 全部同步为 `mi-node`。GitHub 发布源仓库现已切换到 `Micah123321/mi-node`，README 与 install 默认来源已同步收口。 — by yinjianm
   - 方案: [202604161651_mi-full-rename](archive/2026-04/202604161651_mi-full-rename/)
   - 决策: mi-full-rename#D001(仓内标识全量硬切为 mi-node)
 
