@@ -2,6 +2,7 @@ package limiter
 
 import (
 	"testing"
+	"time"
 
 	"github.com/micah123321/mi-node/internal/panel"
 )
@@ -10,7 +11,7 @@ func TestSpeedTracker_UpdateBuckets(t *testing.T) {
 	l := New()
 	st := NewSpeedTracker(l)
 
-	users := []panel.User{
+	users := []model.UserSpec{
 		{ID: 1, UUID: "u1", SpeedLimit: 3, DeviceLimit: 0},  // 3 Mbps
 		{ID: 2, UUID: "u2", SpeedLimit: 0, DeviceLimit: 0},  // unlimited
 		{ID: 3, UUID: "u3", SpeedLimit: 10, DeviceLimit: 2}, // 10 Mbps
@@ -59,7 +60,7 @@ func TestSpeedTracker_UpdateBuckets_PreservesExisting(t *testing.T) {
 	l := New()
 	st := NewSpeedTracker(l)
 
-	users := []panel.User{
+	users := []model.UserSpec{
 		{ID: 1, UUID: "u1", SpeedLimit: 3, DeviceLimit: 0},
 	}
 	l.UpdateUsers(users)
@@ -71,7 +72,7 @@ func TestSpeedTracker_UpdateBuckets_PreservesExisting(t *testing.T) {
 	}
 
 	// Update same user with different speed — should reuse same *rate.Limiter pointer
-	users2 := []panel.User{
+	users2 := []model.UserSpec{
 		{ID: 1, UUID: "u1", SpeedLimit: 5, DeviceLimit: 0},
 	}
 	l.UpdateUsers(users2)
@@ -96,7 +97,7 @@ func TestSpeedTracker_UpdateBuckets_RemovesUsers(t *testing.T) {
 	l := New()
 	st := NewSpeedTracker(l)
 
-	users := []panel.User{
+	users := []model.UserSpec{
 		{ID: 1, UUID: "u1", SpeedLimit: 3, DeviceLimit: 0},
 		{ID: 2, UUID: "u2", SpeedLimit: 5, DeviceLimit: 0},
 	}
@@ -108,7 +109,7 @@ func TestSpeedTracker_UpdateBuckets_RemovesUsers(t *testing.T) {
 	}
 
 	// Remove user 2
-	users2 := []panel.User{
+	users2 := []model.UserSpec{
 		{ID: 1, UUID: "u1", SpeedLimit: 3, DeviceLimit: 0},
 	}
 	l.UpdateUsers(users2)
@@ -119,5 +120,28 @@ func TestSpeedTracker_UpdateBuckets_RemovesUsers(t *testing.T) {
 	}
 	if st.GetLimiter("u2") != nil {
 		t.Error("expected no bucket for removed user 2")
+	}
+}
+
+// Regression: log callback must not run while UpdateBuckets holds t.mu.Lock,
+// otherwise callbacks that call LimitedUserCount() self-deadlock on RWMutex.
+func TestSpeedTracker_UpdateBuckets_LogCallbackMayCallLimitedUserCount(t *testing.T) {
+	l := New()
+	st := NewSpeedTracker(l)
+	l.UpdateUsers([]model.UserSpec{{ID: 1, UUID: "u1", SpeedLimit: 1}})
+	st.SetLogCallback(func(msg string) {
+		_ = st.LimitedUserCount()
+	})
+
+	done := make(chan struct{})
+	go func() {
+		st.UpdateBuckets()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("deadlock: UpdateBuckets did not finish (log callback vs RWMutex)")
 	}
 }

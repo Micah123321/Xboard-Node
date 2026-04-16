@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -345,7 +344,7 @@ func (c *Client) doRequest(method, path string, body []byte, ifNoneMatch string)
 		req.Header.Set("If-None-Match", ifNoneMatch)
 	}
 
-	slog.Debug("panel request", "method", method, "path", path)
+	nlog.Core().Debug("panel request", "method", method, "path", path)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -359,7 +358,7 @@ func (c *Client) doRequest(method, path string, body []byte, ifNoneMatch string)
 		c.apiFailure.Add(1)
 	}
 
-	slog.Debug("panel response", "method", method, "path", path, "status", resp.StatusCode)
+	nlog.Core().Debug("panel response", "method", method, "path", path, "status", resp.StatusCode)
 	return resp, nil
 }
 

@@ -101,7 +101,6 @@ runtime:
 #
 # nodes:
 #   - node_id: 1
-#
 #   - node_id: 2
 #     # 每个节点都可以单独覆盖部分配置
 #     node_type: "shadowsocks"

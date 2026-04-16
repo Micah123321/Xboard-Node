@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cedar2025/xboard-node/internal/nlog"
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
 
@@ -19,6 +21,9 @@ type Config struct {
 	Cert    CertConfig    `yaml:"cert"`
 	Log     LogConfig     `yaml:"log"`
 	Runtime RuntimeConfig `yaml:"runtime"`
+	WS      WSConfig      `yaml:"ws"`
+	// Standalone enables a local-only node that never contacts the panel.
+	Standalone *StandaloneConfig `yaml:"standalone,omitempty"`
 	// HealthPort enables a lightweight HTTP health-check endpoint on the
 	// given port (e.g. 65530). 0 = disabled (default).
 	HealthPort int `yaml:"health_port"`
@@ -79,8 +84,19 @@ type PanelConfig struct {
 }
 
 type NodeConfig struct {
-	PushInterval int `yaml:"push_interval"`
-	PullInterval int `yaml:"pull_interval"`
+	PushInterval         int `yaml:"push_interval"`
+	PullInterval         int `yaml:"pull_interval"`
+	TrackInterval        int `yaml:"track_interval"`         // sec, default 10
+	DeviceReportInterval int `yaml:"device_report_interval"` // sec, default 30
+}
+
+// WSConfig holds WebSocket client tuning options.
+type WSConfig struct {
+	StatusInterval    int `yaml:"status_interval"`    // node.status interval (sec), default 10
+	HandshakeTimeout  int `yaml:"handshake_timeout"`  // WS handshake timeout (sec), default 15
+	BackoffInitial    int `yaml:"backoff_initial"`    // initial reconnect delay (sec), default 1
+	BackoffMax        int `yaml:"backoff_max"`        // max reconnect delay (sec), default 60
+	DiscoveryInterval int `yaml:"discovery_interval"` // WS discovery interval (sec), default 300
 }
 
 type KernelConfig struct {
@@ -247,19 +263,25 @@ func (c *Config) setDefaults() {
 }
 
 func (c *Config) validate() error {
-	if c.Panel.URL == "" {
-		return fmt.Errorf("panel.url is required")
-	}
-	if c.Panel.Token == "" {
-		return fmt.Errorf("panel.token is required")
-	}
-	// In multi-node mode panel.node_id is optional; validate each NodeEntry instead.
-	if len(c.Nodes) == 0 && c.Panel.NodeID <= 0 {
-		return fmt.Errorf("panel.node_id must be positive (or use 'nodes:' for multi-node)")
-	}
-	for i, n := range c.Nodes {
-		if n.NodeID <= 0 {
-			return fmt.Errorf("nodes[%d].node_id must be positive", i)
+	if c.IsStandalone() {
+		if err := c.validateStandalone(); err != nil {
+			return err
+		}
+	} else {
+		if c.Panel.URL == "" {
+			return fmt.Errorf("panel.url is required")
+		}
+		if c.Panel.Token == "" {
+			return fmt.Errorf("panel.token is required")
+		}
+		// In multi-node mode panel.node_id is optional; validate each NodeEntry instead.
+		if len(c.Nodes) == 0 && c.Panel.NodeID <= 0 {
+			return fmt.Errorf("panel.node_id must be positive (or use 'nodes:' for multi-node)")
+		}
+		for i, n := range c.Nodes {
+			if n.NodeID <= 0 {
+				return fmt.Errorf("nodes[%d].node_id must be positive", i)
+			}
 		}
 	}
 	switch c.Kernel.Type {
@@ -403,40 +425,47 @@ func (c *Config) ExpandNodes() []*Config {
 }
 
 func InitLogger(cfg LogConfig) {
-	var level slog.Level
+	var minLevel slog.Level
 	switch cfg.Level {
 	case "debug":
-		level = slog.LevelDebug
+		minLevel = slog.LevelDebug
 	case "warn":
-		level = slog.LevelWarn
+		minLevel = slog.LevelWarn
 	case "error":
-		level = slog.LevelError
+		minLevel = slog.LevelError
 	default:
-		level = slog.LevelInfo
+		minLevel = slog.LevelInfo
 	}
 
 	var w io.Writer
+	useColor := false
 	switch cfg.Output {
 	case "stdout", "":
 		w = os.Stdout
+		useColor = term.IsTerminal(int(os.Stdout.Fd()))
 	case "stderr":
 		w = os.Stderr
+		useColor = term.IsTerminal(int(os.Stderr.Fd()))
 	default:
 		dir := filepath.Dir(cfg.Output)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			slog.Error("failed to create log dir, falling back to stdout", "error", err)
+			fmt.Fprintf(os.Stderr, "failed to create log dir, falling back to stdout: %v\n", err)
 			w = os.Stdout
+			useColor = term.IsTerminal(int(os.Stdout.Fd()))
 		} else {
 			f, err := os.OpenFile(cfg.Output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 			if err != nil {
-				slog.Error("failed to open log file, falling back to stdout", "error", err)
+				fmt.Fprintf(os.Stderr, "failed to open log file, falling back to stdout: %v\n", err)
 				w = os.Stdout
+				useColor = term.IsTerminal(int(os.Stdout.Fd()))
 			} else {
 				w = f
+				useColor = false
 			}
 		}
 	}
 
-	handler := slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})
-	slog.SetDefault(slog.New(handler))
+	nlog.Init(w, minLevel, useColor)
+	// Application logging goes through nlog; silence slog.Default for stray library use.
+	slog.SetDefault(slog.New(slog.DiscardHandler))
 }

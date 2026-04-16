@@ -13,9 +13,20 @@ var testKernelCfg = config.KernelConfig{
 	LogLevel: "warn",
 }
 
-var testUsers = []panel.User{
+var testUsersPanel = []panel.User{
 	{ID: 1, UUID: "279d4f89-3a2c-488d-a67c-2d39a72acdde"},
 	{ID: 5, UUID: "4d5965c8-a60c-452a-a943-af83ec0bb0db"},
+}
+
+var testUsers = model.UserSpecsFromPanel(testUsersPanel)
+
+func testNodeSpec(nc *panel.NodeConfig) *model.NodeSpec { return model.NodeSpecFromPanel(nc) }
+
+func testRouteRules(r []panel.RouteRule) []model.RouteRule {
+	if r == nil {
+		return nil
+	}
+	return model.NodeSpecFromPanel(&panel.NodeConfig{Routes: r}).Routes
 }
 
 func TestBuildConfig_OutboundPriority(t *testing.T) {
@@ -34,7 +45,7 @@ func TestBuildConfig_OutboundPriority(t *testing.T) {
 		},
 	}
 
-	cfg := buildConfig(kcfg, nc, testUsers, "", "")
+	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, "", "")
 	outbounds := cfg["outbounds"].([]M)
 
 	// Since we overrode both 'direct' and 'block', the result should contain
@@ -334,7 +345,7 @@ func TestBuildConfig_AllProtocols_ValidJSON(t *testing.T) {
 
 	for _, tc := range protocols {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := buildConfig(testKernelCfg, &tc.nc, testUsers, "/cert.pem", "/key.pem")
+			cfg := buildConfig(testKernelCfg, testNodeSpec(&tc.nc), testUsers, "/cert.pem", "/key.pem")
 
 			data, err := json.Marshal(cfg)
 			if err != nil {
@@ -367,7 +378,7 @@ func TestBuildConfig_VMess_Users(t *testing.T) {
 		Protocol:   "vmess",
 		ServerPort: 10086,
 	}
-	cfg := buildConfig(testKernelCfg, &nc, testUsers, "", "")
+	cfg := buildConfig(testKernelCfg, testNodeSpec(&nc), testUsers, "", "")
 	data, _ := json.Marshal(cfg)
 
 	var parsed map[string]interface{}
@@ -407,7 +418,7 @@ func TestBuildConfig_VLESS_Flow(t *testing.T) {
 			"server_name": "example.com",
 		},
 	}
-	cfg := buildConfig(testKernelCfg, &nc, testUsers, "", "")
+	cfg := buildConfig(testKernelCfg, testNodeSpec(&nc), testUsers, "", "")
 	data, _ := json.Marshal(cfg)
 
 	var parsed map[string]interface{}
@@ -559,7 +570,7 @@ func TestBuildConfig_StatsEnabled(t *testing.T) {
 		Protocol:   "vmess",
 		ServerPort: 10086,
 	}
-	cfg := buildConfig(testKernelCfg, &nc, testUsers, "", "")
+	cfg := buildConfig(testKernelCfg, testNodeSpec(&nc), testUsers, "", "")
 	data, _ := json.Marshal(cfg)
 
 	var parsed map[string]interface{}
@@ -590,7 +601,7 @@ func TestBuildConfig_Shadowsocks_MultiUser(t *testing.T) {
 		Cipher:     "2022-blake3-aes-128-gcm",
 		ServerKey:  "MDEyMzQ1Njc4OWFiY2RlZg==",
 	}
-	cfg := buildConfig(testKernelCfg, &nc, testUsers, "", "")
+	cfg := buildConfig(testKernelCfg, testNodeSpec(&nc), testUsers, "", "")
 	data, _ := json.Marshal(cfg)
 
 	var parsed map[string]interface{}
@@ -614,7 +625,7 @@ func TestBuildConfig_SocksStats(t *testing.T) {
 		Protocol:   "socks",
 		ServerPort: 1080,
 	}
-	cfg := buildConfig(testKernelCfg, &nc, testUsers, "", "")
+	cfg := buildConfig(testKernelCfg, testNodeSpec(&nc), testUsers, "", "")
 	data, _ := json.Marshal(cfg)
 
 	var parsed map[string]interface{}

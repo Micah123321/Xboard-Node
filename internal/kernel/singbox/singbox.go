@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 
@@ -35,13 +34,13 @@ const drainTimeout = 5 * time.Second
 type SingBox struct {
 	cfg config.KernelConfig
 
-	mu     sync.Mutex
+	mu     sync.RWMutex
 	box    *box.Box
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	users      []panel.User
-	nodeConfig *panel.NodeConfig
+	users      []model.UserSpec
+	nodeConfig *model.NodeSpec
 	certFile   string
 	keyFile    string
 
@@ -53,6 +52,10 @@ type SingBox struct {
 	// speedLimitFunc resolves a user UUID to a *rate.Limiter.
 	// Set once by SetSpeedLimitFunc and forwarded to every new ConnTracker.
 	speedLimitFunc func(string) *rate.Limiter
+
+	// deviceLimitFunc resolves a user UUID to (limit, hasLimit) for gate-keeping.
+	// Set once by SetDeviceLimitFunc and forwarded to every new ConnTracker.
+	deviceLimitFunc func(string) (int, bool)
 
 	// trackerRegistered prevents duplicate AppendTracker calls on the same
 	// Router instance during Reload. Reset to false on full restart.
@@ -66,6 +69,17 @@ func New(cfg config.KernelConfig) *SingBox {
 var _ kernel.Kernel = (*SingBox)(nil)
 
 func (s *SingBox) Name() string { return "sing-box" }
+
+func (s *SingBox) Capabilities() kernel.Capabilities {
+	return kernel.Capabilities{
+		PerUserSpeedLimit:    true,
+		DeviceLimit:          true,
+		BuiltInTrafficStats:  false,
+		AliveIPTracking:      true,
+		ForceCloseConnection: false,
+		ForceCloseUser:       true,
+	}
+}
 
 func (s *SingBox) Protocols() []string {
 	return []string{
@@ -88,7 +102,7 @@ func (s *SingBox) Start(nodeConfig *panel.NodeConfig, users []panel.User, certFi
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
-	slog.Debug("sing-box config generated", "len", len(data))
+	nlog.Core().Debug("sing-box config generated", "len", len(data))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx = include.Context(ctx)
@@ -99,7 +113,11 @@ func (s *SingBox) Start(nodeConfig *panel.NodeConfig, users []panel.User, certFi
 		return fmt.Errorf("parse sing-box options: %w", err)
 	}
 
-	s.stop()
+	// Save old state before creating the new instance.
+	oldBox := s.box
+	oldCancel := s.cancel
+	oldCtx := s.ctx
+	oldTracker := s.connTracker
 
 	instance, err := box.New(box.Options{
 		Context: ctx,
@@ -116,6 +134,7 @@ func (s *SingBox) Start(nodeConfig *panel.NodeConfig, users []panel.User, certFi
 		return fmt.Errorf("start sing-box: %w", err)
 	}
 
+	// New instance started successfully — swap state.
 	s.box = instance
 	s.ctx = ctx
 	s.cancel = cancel
@@ -124,18 +143,54 @@ func (s *SingBox) Start(nodeConfig *panel.NodeConfig, users []panel.User, certFi
 	s.certFile = certFile
 	s.keyFile = keyFile
 
-	// Fresh tracker on full restart (all connections were terminated by s.stop).
+	// Fresh tracker on full restart.
 	s.connTracker = NewConnTracker(0)
 	s.connTracker.SetUserMap(buildUserMap(users))
 	if s.speedLimitFunc != nil {
 		s.connTracker.SetSpeedLimitFunc(s.speedLimitFunc)
 	}
+	if s.deviceLimitFunc != nil {
+		s.connTracker.SetDeviceLimitFunc(s.deviceLimitFunc)
+	}
 
 	s.trackerRegistered = false
 	s.registerTracker(ctx)
 
-	slog.Info("sing-box started", "users", len(users))
+	// Recycle old instance in background — drain then close.
+	if oldBox != nil {
+		go recycleOldBox(oldBox, oldCancel, oldCtx, oldTracker)
+	}
+
+	nlog.Core().Debug("sing-box started", "users", len(users))
 	return nil
+}
+
+// recycleOldBox gracefully shuts down a previous sing-box instance in the
+// background. It closes listen sockets first, waits for connections to drain,
+// then hard-closes. This avoids blocking the new instance's startup.
+func recycleOldBox(oldBox *box.Box, oldCancel context.CancelFunc, oldCtx context.Context, oldTracker *ConnTracker) {
+	// Step 1: close listen sockets so no new connections arrive on old ports.
+	if im := service.FromContext[adapter.InboundManager](oldCtx); im != nil {
+		_ = im.Close()
+	}
+
+	// Step 2: drain in-flight connections (best-effort).
+	if oldTracker != nil {
+		deadline := time.Now().Add(drainTimeout)
+		for time.Now().Before(deadline) {
+			if oldTracker.ActiveCount() == 0 {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	// Step 3: hard-close everything.
+	oldBox.Close()
+	if oldCancel != nil {
+		oldCancel()
+	}
+	nlog.Core().Debug("sing-box: old instance recycled")
 }
 
 // Reload hot-swaps the inbound users and routing rules without restarting the box.
@@ -176,9 +231,9 @@ func (s *SingBox) Reload(nodeConfig *panel.NodeConfig, users []panel.User, certF
 
 	// Update routing rules
 	if err := router.UpdateRules(opts.Route.Rules, opts.Route.RuleSet); err != nil {
-		slog.Warn("routing reload failed", "error", err)
+		nlog.Core().Debug("routing reload failed", "error", err)
 	} else {
-		slog.Info("sing-box routing reloaded")
+		nlog.Core().Debug("sing-box routing reloaded")
 	}
 
 	nopFactory := singLog.NewNOPFactory()
@@ -220,6 +275,10 @@ func (s *SingBox) Reload(nodeConfig *panel.NodeConfig, users []panel.User, certF
 					if opts, ok := inb.Options.(*option.AnyTLSInboundOptions); ok {
 						err = v.UpdateUsers(opts.Users)
 					}
+				case adapter.UpdatableInbound[option.MieruUser]:
+					if opts, ok := inb.Options.(*option.MieruInboundOptions); ok {
+						err = v.UpdateUsers(opts.Users)
+					}
 				case adapter.UpdatableInbound[auth.User]:
 					switch opts := inb.Options.(type) {
 					case *option.NaiveInboundOptions:
@@ -233,7 +292,7 @@ func (s *SingBox) Reload(nodeConfig *panel.NodeConfig, users []panel.User, certF
 				if err == nil {
 					continue
 				}
-				slog.Warn("incremental update failed, falling back to recreate", "tag", tag, "error", err)
+				nlog.Core().Warn("incremental update failed, falling back to recreate", "tag", tag, "error", err)
 			}
 		}
 
@@ -255,7 +314,7 @@ func (s *SingBox) Reload(nodeConfig *panel.NodeConfig, users []panel.User, certF
 		s.connTracker.SetUserMap(buildUserMap(users))
 	}
 
-	slog.Info("sing-box reloaded (users and routes hot-swapped)", "users", len(users))
+	nlog.Core().Debug("sing-box reloaded", "users", len(users))
 	s.users = users
 	s.nodeConfig = nodeConfig
 	s.certFile = certFile
@@ -335,9 +394,6 @@ func (s *SingBox) connTrackerSafe() *ConnTracker {
 }
 
 // SetSpeedLimitFunc configures per-user bandwidth throttling.
-// The function is forwarded to the ConnTracker, which embeds the rate limiter
-// in each tracked connection wrapper. This merges byte counting and rate limiting
-// into a single CountFunc callback, allowing splice/zero-copy paths.
 func (s *SingBox) SetSpeedLimitFunc(fn func(uuid string) *rate.Limiter) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -347,10 +403,39 @@ func (s *SingBox) SetSpeedLimitFunc(fn func(uuid string) *rate.Limiter) {
 	}
 }
 
+// SetDeviceLimitFunc configures per-user device limit gate-keeping.
+// Connections exceeding the limit are rejected at connect time.
+func (s *SingBox) SetDeviceLimitFunc(fn func(uuid string) (int, bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deviceLimitFunc = fn
+	if s.connTracker != nil {
+		s.connTracker.SetDeviceLimitFunc(fn)
+	}
+}
+
+// UpdateGlobalDevices updates the global device state from panel (for multi-node).
+func (s *SingBox) UpdateGlobalDevices(users map[int][]string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.connTracker != nil {
+		s.connTracker.UpdateGlobalDevices(users)
+	}
+}
+
+// ClearGlobalDevices clears the global device state (on WS disconnect).
+func (s *SingBox) ClearGlobalDevices() {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.connTracker != nil {
+		s.connTracker.ClearGlobalDevices()
+	}
+}
+
 // ─── User management (non-disruptive) ───────────────────────────────────────
 
 // AddUsers hot-swaps users into running inbounds. Zero connection disruption.
-func (s *SingBox) AddUsers(users []panel.User) (int, error) {
+func (s *SingBox) AddUsers(users []model.UserSpec) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -362,7 +447,7 @@ func (s *SingBox) AddUsers(users []panel.User) (int, error) {
 	for _, u := range s.users {
 		existing[u.ID] = struct{}{}
 	}
-	var toAdd []panel.User
+	var toAdd []model.UserSpec
 	for _, u := range users {
 		if _, dup := existing[u.ID]; !dup {
 			toAdd = append(toAdd, u)
@@ -372,7 +457,7 @@ func (s *SingBox) AddUsers(users []panel.User) (int, error) {
 		return 0, nil
 	}
 
-	merged := append(append([]panel.User{}, s.users...), toAdd...)
+	merged := append(append([]model.UserSpec{}, s.users...), toAdd...)
 	if err := s.reloadInboundsLocked(merged); err != nil {
 		return 0, err
 	}
@@ -382,7 +467,7 @@ func (s *SingBox) AddUsers(users []panel.User) (int, error) {
 
 // RemoveUsers hot-swaps users out of running inbounds. Zero connection disruption
 // for remaining users.
-func (s *SingBox) RemoveUsers(users []panel.User) (int, error) {
+func (s *SingBox) RemoveUsers(users []model.UserSpec) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -394,7 +479,7 @@ func (s *SingBox) RemoveUsers(users []panel.User) (int, error) {
 	for _, u := range users {
 		removeSet[u.ID] = struct{}{}
 	}
-	var kept []panel.User
+	var kept []model.UserSpec
 	removed := 0
 	for _, u := range s.users {
 		if _, rm := removeSet[u.ID]; rm {
@@ -415,7 +500,7 @@ func (s *SingBox) RemoveUsers(users []panel.User) (int, error) {
 }
 
 // UpdateUsers replaces the entire user set atomically via hot-swap.
-func (s *SingBox) UpdateUsers(users []panel.User) (added, removed int, err error) {
+func (s *SingBox) UpdateUsers(users []model.UserSpec) (added, removed int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -505,6 +590,10 @@ func (s *SingBox) reloadInboundsLocked(users []panel.User) error {
 				if opts, ok := inb.Options.(*option.AnyTLSInboundOptions); ok {
 					err = v.UpdateUsers(opts.Users)
 				}
+			case adapter.UpdatableInbound[option.MieruUser]:
+				if opts, ok := inb.Options.(*option.MieruInboundOptions); ok {
+					err = v.UpdateUsers(opts.Users)
+				}
 			case adapter.UpdatableInbound[auth.User]:
 				switch opts := inb.Options.(type) {
 				case *option.NaiveInboundOptions:
@@ -518,7 +607,7 @@ func (s *SingBox) reloadInboundsLocked(users []panel.User) error {
 			if err == nil {
 				continue
 			}
-			slog.Warn("incremental update failed, recreating inbound", "tag", tag, "error", err)
+			nlog.Core().Warn("incremental update failed, recreating inbound", "tag", tag, "error", err)
 		}
 
 		_ = im.Remove(tag)
@@ -532,19 +621,18 @@ func (s *SingBox) reloadInboundsLocked(users []panel.User) error {
 		s.connTracker.SetUserMap(buildUserMap(users))
 	}
 
-	slog.Info("sing-box users hot-swapped", "users", len(users))
+	nlog.Core().Debug("sing-box users hot-swapped", "users", len(users))
 	return nil
 }
 
 // ─── Observability ──────────────────────────────────────────────────────────
-func (s *SingBox) GetConnections(_ context.Context) ([]kernel.Connection, error) {
+func (s *SingBox) GetUserTraffic(_ context.Context) (traffic map[int][2]int64, aliveIPs map[int]map[string]bool, connCount int, err error) {
 	ct := s.connTrackerSafe()
 	if ct == nil {
-		return nil, nil
+		return nil, nil, 0, nil
 	}
-	conns := ct.Snapshot()
-	slog.Debug("GetConnections snapshot", "count", len(conns))
-	return conns, nil
+	traffic, aliveIPs, connCount = ct.GetUserTraffic()
+	return traffic, aliveIPs, connCount, nil
 }
 
 // CloseConnection force-closes a specific connection by its ID.
@@ -554,15 +642,25 @@ func (s *SingBox) CloseConnection(_ context.Context, connID string) error {
 		return fmt.Errorf("not running")
 	}
 	if !ct.CloseByID(connID) {
-		slog.Debug("CloseConnection: connection not found (already closed?)", "id", connID)
+		nlog.Core().Debug("CloseConnection: connection not found (already closed?)", "id", connID)
 	}
+	return nil
+}
+
+// CloseUserConnections terminates all connections for a user UUID.
+func (s *SingBox) CloseUserConnections(_ context.Context, uuid string) error {
+	ct := s.connTrackerSafe()
+	if ct == nil {
+		return nil
+	}
+	ct.CloseByUUID(uuid)
 	return nil
 }
 
 // buildUserMap creates a UUID→userID mapping used by ConnTracker to attribute
 // connections to the correct user. All sing-box protocols use the user's UUID
 // as the inbound name/username, so this covers every protocol.
-func buildUserMap(users []panel.User) map[string]int {
+func buildUserMap(users []model.UserSpec) map[string]int {
 	m := make(map[string]int, len(users))
 	for _, u := range users {
 		m[u.UUID] = u.ID

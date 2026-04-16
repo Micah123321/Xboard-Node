@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"math"
 	"net"
 	"os"
@@ -29,21 +28,25 @@ import (
 
 type Service struct {
 	cfg          *config.Config
-	panel        *panel.Client
+	source       controlplane.Source
+	sink         controlplane.Sink
 	kernel       kernel.Kernel
 	tracker      *tracker.Tracker
 	limiter      *limiter.Limiter
 	speedTracker *limiter.SpeedTracker
 	cert         *cert.Manager
 
-	lastConfig *panel.NodeConfig
-	lastUsers  []panel.User
+	lastConfig *model.NodeSpec
+	lastUsers  []model.UserSpec
+
+	// nodeLog is the logger with node context for this service instance.
+	nodeLog *nlog.NodeLog
 
 	// appliedState tracks the configuration and users that are currently
 	// successfully running in the kernel.
 	appliedState struct {
-		Config *panel.NodeConfig
-		Users  []panel.User
+		Config *model.NodeSpec
+		Users  []model.UserSpec
 	}
 
 	pushInterval int // seconds
@@ -54,9 +57,15 @@ type Service struct {
 	pullBackoff    apiBackoff // backoff for panel pull failures
 	pushBackoff    apiBackoff // backoff for panel push failures
 
-	wsClient       *panel.WSClient           // WebSocket client (nil if WS not enabled)
-	wsEvents       chan panel.WSEvent        // receives data events from WS client
-	wsStatusCh     chan panel.WSStatusChange // receives WS connect/disconnect notifications
+	// pushActive prevents overlapping push/pull goroutines.
+	pushActive atomic.Bool
+	pullActive atomic.Bool
+	// pullResults delivers async pullViaAPI results back to the main goroutine.
+	pullResults chan pullResult
+
+	wsClient       controlplane.PushClient   // Push client (nil if push is not enabled)
+	wsEvents       chan controlplane.Event   // receives data events from push transport
+	wsStatusCh     chan controlplane.StatusChange // receives push connectivity notifications
 	wsCancel       context.CancelFunc        // cancels the WS client goroutine
 	wsDisconnectAt time.Time                 // when WS last disconnected (zero if connected)
 
@@ -66,10 +75,13 @@ type Service struct {
 
 // apiBackoff implements simple exponential backoff for API failures.
 type apiBackoff struct {
+	mu            sync.Mutex
 	skipRemaining int
 }
 
 func (b *apiBackoff) shouldSkip() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.skipRemaining > 0 {
 		b.skipRemaining--
 		return true
@@ -77,8 +89,15 @@ func (b *apiBackoff) shouldSkip() bool {
 	return false
 }
 
-func (b *apiBackoff) onSuccess() { b.skipRemaining = 0 }
+func (b *apiBackoff) onSuccess() {
+	b.mu.Lock()
+	b.skipRemaining = 0
+	b.mu.Unlock()
+}
+
 func (b *apiBackoff) onFailure() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.skipRemaining <= 0 {
 		b.skipRemaining = 1
 	} else if b.skipRemaining < 8 {
@@ -87,8 +106,7 @@ func (b *apiBackoff) onFailure() {
 }
 
 func New(cfg *config.Config) *Service {
-	panelClient := panel.NewClient(cfg.Panel)
-	certMgr := cert.NewManager(cfg.Cert)
+		certMgr := cert.NewManager(cfg.Cert)
 
 	var k kernel.Kernel
 	switch cfg.Kernel.Type {
@@ -97,23 +115,32 @@ func New(cfg *config.Config) *Service {
 	case "xray":
 		k = xray.New(cfg.Kernel)
 	default:
-		slog.Error("unsupported kernel type, defaulting to sing-box", "type", cfg.Kernel.Type)
+		nlog.Core().Error("unsupported kernel type, defaulting to sing-box", "type", cfg.Kernel.Type)
 		k = singbox.New(cfg.Kernel)
 	}
 
 	l := limiter.New()
 	st := limiter.NewSpeedTracker(l)
 
+	var cp controlplane.ControlPlane
+	if cfg.IsStandalone() {
+		cp = controlplane.NewLocalControlPlane(cfg)
+	} else {
+		cp = controlplane.NewPanelControlPlane(cfg.Panel, cfg.WS)
+	}
+
 	return &Service{
 		cfg:          cfg,
-		panel:        panelClient,
+		source:       cp,
+		sink:         cp,
 		kernel:       k,
 		tracker:      tracker.New(),
 		limiter:      l,
 		speedTracker: st,
 		cert:         certMgr,
-		wsEvents:     make(chan panel.WSEvent, 16),
-		wsStatusCh:   make(chan panel.WSStatusChange, 4),
+		wsEvents:     make(chan controlplane.Event, 16),
+		wsStatusCh:   make(chan controlplane.StatusChange, 4),
+		pullResults:  make(chan pullResult, 1),
 	}
 }
 
@@ -130,63 +157,54 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 	defer s.kernel.Stop()
 
+
 	// Set up tickers
-	trackTicker := time.NewTicker(10 * time.Second)
+	trackTicker := time.NewTicker(time.Duration(s.cfg.Node.TrackInterval) * time.Second)
 	pushInterval := time.Duration(math.Max(float64(s.pushInterval), 5)) * time.Second
 	pullInterval := time.Duration(s.pullInterval) * time.Second
-	if pullInterval < 10*time.Second {
-		pullInterval = 60 * time.Second
-	}
 	reportTicker := time.NewTicker(pushInterval)
 	pullTicker := time.NewTicker(pullInterval)
-
-	slog.Info("tickers initialized", "push", pushInterval, "pull", pullInterval)
+	deviceReportTicker := time.NewTicker(time.Duration(s.cfg.Node.DeviceReportInterval) * time.Second)
 
 	// WS discovery: when in REST-only mode, periodically re-handshake to check
 	// if WS has been enabled. When WS is disconnected for too long, re-check
 	// if it's still available.
-	wsDiscoveryTicker := time.NewTicker(5 * time.Minute)
+	wsDiscoveryTicker := time.NewTicker(time.Duration(s.cfg.WS.DiscoveryInterval) * time.Second)
 
 	defer trackTicker.Stop()
 	defer reportTicker.Stop()
 	defer pullTicker.Stop()
+	defer deviceReportTicker.Stop()
 	defer wsDiscoveryTicker.Stop()
 
 	s.startWSClient(ctx)
 
-	sMode := "disabled"
-	if s.wsClient != nil {
-		sMode = "connecting"
-	}
-	slog.Info("service started",
-		"kernel", s.kernel.Name(),
-		"push_interval", s.pushInterval,
-		"pull_interval", s.pullInterval,
-		"websocket", sMode,
-	)
-
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Info("service shutting down")
-			s.pushReport()
+			s.pushReportSync()
 			return nil
 
 		case <-trackTicker.C:
 			s.trackAndEnforce(ctx)
 
 		case <-reportTicker.C:
-			s.pushReport()
+			s.pushReportAsync()
+
+		case <-deviceReportTicker.C:
+			s.reportDevices()
 
 		case <-pullTicker.C:
 			// When WebSocket is connected, skip REST polling entirely.
 			// Config/user updates arrive via WS push.
 			if s.wsClient != nil && s.wsClient.IsConnected() {
-				slog.Debug("ws connected, skipping REST pull")
 				continue
 			}
-			slog.Info("ws not connected or disabled, polling from API")
-			s.pullViaAPI(ctx)
+			nlog.Core().Debug("polling from API (ws not connected)")
+			s.pullViaAPIAsync(ctx)
+
+		case result := <-s.pullResults:
+			s.applyPullResult(ctx, result)
 
 		case <-wsDiscoveryTicker.C:
 			s.wsDiscovery(ctx)
@@ -201,36 +219,18 @@ func (s *Service) Run(ctx context.Context) error {
 }
 
 func (s *Service) initialSetup(ctx context.Context) error {
-	// Register speed limit lookup with kernel unconditionally (before WS/V1 branch).
-	// This ensures speedLimitFunc is set regardless of which code path applies config.
+	// Register speed limit lookup with kernel unconditionally (before push/poll branch).
 	s.kernel.SetSpeedLimitFunc(s.speedTracker.GetLimiter)
+	s.kernel.SetDeviceLimitFunc(s.limiter.GetDeviceLimitByUUID)
 
-	slog.Info("performing handshake with panel")
 
-	var hs *panel.HandshakeResponse
-	var err error
-
-	// Retry loop for initial handshake
-	for attempt := 1; ; attempt++ {
-		hs, err = s.panel.Handshake()
-		if err != nil {
-			slog.Error("handshake failed", "attempt", attempt, "error", err)
-			if attempt >= 5 {
-				return fmt.Errorf("handshake failed after %d attempts: %w", attempt, err)
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(time.Duration(attempt*5) * time.Second):
-				continue
-			}
-		}
-		break
+	bootstrap, err := s.source.Initial(ctx, s.wsMetrics, s.wsEvents, s.wsStatusCh)
+	if err != nil {
+		return err
 	}
 
-	// Apply settings from panel handshake (Handshake provides default intervals)
-	if s.cfg.Node.PushInterval == 0 && hs.Settings.PushInterval > 0 {
-		s.pushInterval = hs.Settings.PushInterval
+	if s.cfg.Node.PushInterval == 0 && bootstrap.PushInterval > 0 {
+		s.pushInterval = bootstrap.PushInterval
 	} else {
 		s.pushInterval = s.cfg.Node.PushInterval
 	}
@@ -238,8 +238,8 @@ func (s *Service) initialSetup(ctx context.Context) error {
 		s.pushInterval = 60
 	}
 
-	if s.cfg.Node.PullInterval == 0 && hs.Settings.PullInterval > 0 {
-		s.pullInterval = hs.Settings.PullInterval
+	if s.cfg.Node.PullInterval == 0 && bootstrap.PullInterval > 0 {
+		s.pullInterval = bootstrap.PullInterval
 	} else {
 		s.pullInterval = s.cfg.Node.PullInterval
 	}
@@ -247,48 +247,28 @@ func (s *Service) initialSetup(ctx context.Context) error {
 		s.pullInterval = 60
 	}
 
-	// If WebSocket is enabled, skip initial V1 APIs fetch and wait for推送
-	if hs.WebSocket.Enabled && hs.WebSocket.WSURL != "" {
-		s.wsClient = s.newWSClient(hs.WebSocket.WSURL)
-		slog.Info("handshake complete (websocket enabled), waiting for data push...",
-			"ws_url", hs.WebSocket.WSURL,
-		)
+	if bootstrap.Push != nil {
+		s.wsClient = bootstrap.Push
 		return nil
 	}
-
-	// Falls back to V1 APIs only if WebSocket is disabled in panel
-	slog.Info("websocket disabled or missing, falling back to V1 APIs")
-
-	// Fetch initial config and users via V1 APIs
-	nodeConfig, err := s.panel.GetConfig()
-	if err != nil {
-		return fmt.Errorf("initial config fetch: %w", err)
-	}
-	if nodeConfig == nil {
+	if bootstrap.Config == nil {
 		return fmt.Errorf("initial config is nil")
 	}
 
-	users, err := s.panel.GetUsers()
-	if err != nil {
-		return fmt.Errorf("initial user fetch: %w", err)
-	}
+	s.metricsMu.Lock()
+	s.lastConfig = bootstrap.Config
+	s.metricsMu.Unlock()
+	s.lastConfigHash = computeConfigHash(bootstrap.Config)
+	s.updateUserState(bootstrap.Users)
 
-	// Apply initial data
-	s.lastConfig = nodeConfig
-	s.lastUsers = users
-	s.lastUserHash = computeUserHash(users)
-	s.lastConfigHash = computeConfigHash(nodeConfig)
-	s.limiter.UpdateUsers(users)
-	s.speedTracker.UpdateBuckets()
-
-	slog.Info("handshake complete (V1 fallback)",
-		"protocol", nodeConfig.Protocol,
-		"port", nodeConfig.ServerPort,
-		"users", len(users),
+	nlog.Core().Info("initial snapshot ready",
+		"protocol", bootstrap.Config.Protocol,
+		"port", bootstrap.Config.ServerPort,
+		"users", len(bootstrap.Users),
 	)
 
-	if len(users) == 0 {
-		slog.Warn("no users, kernel will not start until users are available")
+	if len(bootstrap.Users) == 0 {
+		nlog.Core().Warn("no users, kernel will not start until users are available")
 		return nil
 	}
 
@@ -314,25 +294,25 @@ func (s *Service) initialSetup(ctx context.Context) error {
 
 // applyRemoteOverrides updates service-level settings (log level, cert config)
 // from the panel's NodeConfig. Returns true if cert paths changed (kernel restart needed).
-func (s *Service) applyRemoteOverrides(ctx context.Context, nc *panel.NodeConfig) bool {
+func (s *Service) applyRemoteOverrides(ctx context.Context, nc *model.NodeSpec) bool {
 	if nc == nil {
 		return false
 	}
 
 	// Dynamic Log Level (Kernel)
 	if nc.KernelLogLevel != "" && nc.KernelLogLevel != s.cfg.Kernel.LogLevel {
-		slog.Info("cert: kernel log level override", "old", s.cfg.Kernel.LogLevel, "new", nc.KernelLogLevel)
+		nlog.Core().Info("cert: kernel log level override", "old", s.cfg.Kernel.LogLevel, "new", nc.KernelLogLevel)
 		s.cfg.Kernel.LogLevel = nc.KernelLogLevel
 	}
 
 	// Certificate configuration from panel (panel-first: takes precedence over local config)
 	if nc.CertConfig != nil {
-		return s.applyPanelCert(ctx, nc.CertConfig)
+		return s.applyNodeCert(ctx, nc.CertConfig)
 	}
 
 	// Legacy fields (deprecated: prefer cert_config)
 	if nc.AutoTLS != s.cfg.Cert.AutoTLS {
-		slog.Info("cert: auto_tls policy changed (deprecated field)", "new", nc.AutoTLS)
+		nlog.Core().Info("cert: auto_tls policy changed (deprecated field)", "new", nc.AutoTLS)
 		s.cfg.Cert.AutoTLS = nc.AutoTLS
 	}
 	if nc.Domain != "" && nc.Domain != s.cfg.Cert.Domain {
@@ -344,30 +324,26 @@ func (s *Service) applyRemoteOverrides(ctx context.Context, nc *panel.NodeConfig
 
 // applyPanelCert converts a panel CertConfig into the local config format and
 // reconfigures the cert manager. Reports whether cert paths changed.
-func (s *Service) applyPanelCert(ctx context.Context, pc *panel.CertConfig) bool {
-	newCfg := config.CertConfig{
-		CertMode:    pc.CertMode,
-		Domain:      pc.Domain,
-		Email:       pc.Email,
-		DNSProvider: pc.DNSProvider,
-		DNSEnv:      pc.DNSEnv,
-		HTTPPort:    pc.HTTPPort,
-		CertFile:    pc.CertFile,
-		KeyFile:     pc.KeyFile,
-		CertContent: pc.CertContent,
-		KeyContent:  pc.KeyContent,
-		// Preserve local storage dir — only the operator controls where certs live.
-		CertDir: s.cfg.Cert.CertDir,
-	}
-
-	changed, err := s.cert.Reconfigure(ctx, newCfg)
-	if err != nil {
-		slog.Error("failed to apply panel cert config", "mode", pc.CertMode, "error", err)
+func (s *Service) applyNodeCert(ctx context.Context, newCfg *config.CertConfig) bool {
+	if newCfg == nil {
 		return false
 	}
-	s.cfg.Cert = newCfg
+	cfgCopy := *newCfg
+	cfgCopy.CertDir = s.cfg.Cert.CertDir
+
+	changed, err := s.cert.Reconfigure(ctx, cfgCopy)
+	if err != nil {
+		nlog.Core().Error("failed to apply runtime cert config", "mode", cfgCopy.CertMode, "error", err)
+		return false
+	}
+	s.cfg.Cert = cfgCopy
 	if changed {
-		slog.Info("cert: paths updated from panel", "cert", s.cert.CertFile(), "key", s.cert.KeyFile())
+		msg := fmt.Sprintf("cert: paths updated cert=%s key=%s", s.cert.CertFile(), s.cert.KeyFile())
+		if s.nodeLog != nil {
+			s.nodeLog.Info(msg)
+		} else {
+			nlog.Core().Info(msg)
+		}
 	}
 	return changed
 }
@@ -501,50 +477,46 @@ func (s *Service) startWSClient(ctx context.Context) {
 	go s.wsClient.Run(wsCtx)
 }
 
-// newWSClient creates a WSClient with standard event/status callbacks.
-func (s *Service) newWSClient(wsURL string) *panel.WSClient {
-	return panel.NewWSClient(
-		wsURL,
-		s.cfg.Panel.Token,
-		s.cfg.Panel.NodeID,
-		func(event panel.WSEvent) {
-			select {
-			case s.wsEvents <- event:
-			default:
-				slog.Warn("ws event channel full, dropping event", "type", event.Type)
-			}
-		},
-		func(status panel.WSStatusChange) {
-			select {
-			case s.wsStatusCh <- status:
-			default:
-			}
-		},
-		func() map[string]interface{} {
-			status := monitor.Collect()
-			m := s.buildMetrics(status)
-			m["kernel_status"] = s.kernel.IsRunning()
-			return m
-		},
-	)
+func (s *Service) wsMetrics() map[string]interface{} {
+	status := monitor.Collect()
+	m := s.buildMetrics(status)
+	m["kernel_status"] = s.kernel.IsRunning()
+	return m
 }
 
 // handleWSStatus reacts to WS connectivity changes.
+
 //
 // - On disconnect: record timestamp, immediately REST poll.
 // - On reconnect: clear disconnect timestamp, REST poll to catch missed events.
-func (s *Service) handleWSStatus(ctx context.Context, status panel.WSStatusChange) {
+func (s *Service) handleWSStatus(ctx context.Context, status controlplane.StatusChange) {
 	if status.Connected {
+		s.metricsMu.Lock()
 		s.wsDisconnectAt = time.Time{}
-		slog.Info("ws connected, waiting for server-side full sync push")
-		// No REST pull needed — server detects new connection and pushes
-		// full config + users automatically on auth success.
+		s.metricsMu.Unlock()
+		// Use nodeLog if available, otherwise core
+		if s.nodeLog != nil {
+			s.nodeLog.Info("ws connected")
+		} else {
+			nlog.Core().Info("ws connected")
+		}
+		// After reconnect, proactively pull once to ensure we haven't missed
+		// any updates during the disconnection window.
+		s.pullViaAPIAsync(ctx)
 	} else {
+		s.metricsMu.Lock()
 		if s.wsDisconnectAt.IsZero() {
 			s.wsDisconnectAt = time.Now()
 		}
-		slog.Info("ws disconnected, falling back to REST polling")
-		s.pullViaAPI(ctx)
+		s.metricsMu.Unlock()
+		if s.nodeLog != nil {
+			s.nodeLog.Info("ws disconnected")
+		} else {
+			nlog.Core().Info("ws disconnected")
+		}
+		// Clear global device state on disconnect
+		s.kernel.ClearGlobalDevices()
+		s.pullViaAPIAsync(ctx)
 	}
 }
 
@@ -558,148 +530,190 @@ func (s *Service) handleWSStatus(ctx context.Context, status panel.WSStatusChang
 //     If WS is now disabled, stop the WS client and switch to REST-only.
 //     If WS config changed (different URL/channel), restart with new config.
 func (s *Service) wsDiscovery(ctx context.Context) {
-	needsCheck := false
-
-	if s.wsClient == nil {
-		needsCheck = true
-		slog.Debug("ws discovery: no WS client, checking if panel enabled WS")
-	} else if !s.wsDisconnectAt.IsZero() && time.Since(s.wsDisconnectAt) > 10*time.Minute {
-		needsCheck = true
-		slog.Debug("ws discovery: WS disconnected for >10min, re-checking WS config")
+	if !s.source.SupportsDiscovery() {
+		return
 	}
 
+	needsCheck := false
+	if s.wsClient == nil {
+		needsCheck = true
+		nlog.Core().Debug("push discovery: no push client, checking if control plane enabled push")
+	} else if !s.wsDisconnectAt.IsZero() && time.Since(s.wsDisconnectAt) > 10*time.Minute {
+		needsCheck = true
+		nlog.Core().Debug("push discovery: push disconnected for >10min, re-checking")
+	}
 	if !needsCheck {
 		return
 	}
 
-	hs, err := s.panel.Handshake()
+	pushClient, err := s.source.Discover(ctx, s.wsMetrics, s.wsEvents, s.wsStatusCh)
 	if err != nil {
-		slog.Debug("ws discovery: handshake failed", "error", err)
+		nlog.Core().Debug("push discovery failed", "error", err)
 		return
 	}
+	if s.source.SupportsPolling() {
+		s.pullViaAPIAsync(ctx)
+	}
 
-	// Apply any latest config/user changes via dedicated APIs
-	s.pullViaAPI(ctx)
-
-	if hs.WebSocket.Enabled && hs.WebSocket.WSURL != "" {
+	if pushClient != nil {
 		if s.wsClient == nil {
-			slog.Info("ws discovery: panel has WS enabled, creating WS client")
-			s.wsClient = s.newWSClient(hs.WebSocket.WSURL)
+			nlog.Core().Info("push discovery: control plane enabled push, creating client")
+			s.metricsMu.Lock()
+			s.wsClient = pushClient
 			s.wsDisconnectAt = time.Time{}
+			s.metricsMu.Unlock()
 			s.startWSClient(ctx)
 		}
 	} else if s.wsClient != nil {
-		slog.Info("ws discovery: panel disabled WS, switching to REST-only")
+		nlog.Core().Info("push discovery: control plane disabled push, switching to polling")
 		if s.wsCancel != nil {
 			s.wsCancel()
 		}
+		s.metricsMu.Lock()
 		s.wsClient = nil
-		s.wsCancel = nil
 		s.wsDisconnectAt = time.Time{}
+		s.metricsMu.Unlock()
+		s.wsCancel = nil
 	}
 }
 
 // handleWSEvent processes data events received via WebSocket
-func (s *Service) handleWSEvent(ctx context.Context, event panel.WSEvent) {
+func (s *Service) handleWSEvent(ctx context.Context, event controlplane.Event) {
 	switch event.Type {
-	case panel.WSEventSyncConfig:
+	case controlplane.EventSyncConfig:
 		if event.Config == nil {
-			slog.Warn("ws: sync.config event with nil config, ignoring")
 			return
 		}
 		newConfigHash := computeConfigHash(event.Config)
 		if newConfigHash == s.lastConfigHash {
-			slog.Debug("ws: config unchanged (same hash), skipping")
 			return
 		}
-		slog.Info("ws: applying config update", "protocol", event.Config.Protocol)
+		// Initialize nodeLog on first config
+		if s.nodeLog == nil {
+			s.nodeLog = nlog.ForNode(event.Config.Protocol, event.Config.ServerPort)
+		}
+		s.nodeLog.Info(fmt.Sprintf("config updated, %d users", len(event.Users)))
+		s.metricsMu.Lock()
 		s.lastConfig = event.Config
+		s.metricsMu.Unlock()
 		s.lastConfigHash = newConfigHash
 		s.applyRemoteOverrides(ctx, event.Config)
 		s.applyChanges(ctx, true, false)
 
-	case panel.WSEventSyncUsers:
+	case controlplane.EventSyncUsers:
 		if event.Users == nil {
-			slog.Warn("ws: sync.users event with nil users, ignoring")
 			return
 		}
 		newHash := computeUserHash(event.Users)
 		if newHash == s.lastUserHash {
-			slog.Debug("ws: users unchanged (same hash), skipping")
 			return
 		}
-		slog.Info("ws: applying user update", "count", len(event.Users))
+		if s.nodeLog != nil {
+			s.nodeLog.Info(fmt.Sprintf("users updated, %d users", len(event.Users)))
+		}
 		s.applyUserUpdate(ctx, event.Users, newHash)
 
-	case panel.WSEventSyncUserDelta:
+	case controlplane.EventSyncUserDelta:
 		if len(event.DeltaUsers) == 0 {
-			slog.Warn("ws: sync.user.delta event with empty users, ignoring")
 			return
 		}
-		slog.Info("ws: applying user delta", "action", event.DeltaAction, "count", len(event.DeltaUsers))
+		if s.nodeLog != nil {
+			s.nodeLog.Info(fmt.Sprintf("users delta: %s, %d users", event.DeltaAction, len(event.DeltaUsers)))
+		}
 		s.applyUserDelta(ctx, event.DeltaAction, event.DeltaUsers)
 
+	case controlplane.EventSyncDevices:
+		// Sync global device state
+		if event.DeviceUsers != nil {
+			s.kernel.UpdateGlobalDevices(event.DeviceUsers)
+		}
+
 	default:
-		slog.Debug("ws: unknown event type", "type", event.Type)
+		nlog.Core().Debug(fmt.Sprintf("unknown ws event: %v", event.Type))
 	}
 }
 
-// pullViaAPI re-calls the config and user APIs for polling fallback.
-// Also opportunistically detects WS enablement when in REST-only mode.
-func (s *Service) pullViaAPI(ctx context.Context) {
+// pullViaAPIAsync fetches config/users from the panel API in a background
+// goroutine and sends the result to pullResults for the main goroutine to apply.
+func (s *Service) pullViaAPIAsync(ctx context.Context) {
+	if !s.source.SupportsPolling() {
+		return
+	}
+	if !s.pullActive.CompareAndSwap(false, true) {
+		nlog.Core().Debug("pull already in progress, skipping")
+		return
+	}
 	if s.pullBackoff.shouldSkip() {
-		slog.Debug("skipping pull due to backoff")
+		nlog.Core().Debug("skipping pull due to backoff")
+		s.pullActive.Store(false)
 		return
 	}
 
-	config, err := s.panel.GetConfig()
-	if err != nil {
-		slog.Error("poll config failed", "error", err)
-		s.pullBackoff.onFailure()
-		return
-	}
+	currentConfigHash := s.lastConfigHash
+	certChanged := s.cert.CertRenewed()
 
-	users, err := s.panel.GetUsers()
-	if err != nil {
-		slog.Error("poll users failed", "error", err)
-		s.pullBackoff.onFailure()
-		return
-	}
+	go func() {
+		defer s.pullActive.Store(false)
+		snapshot, err := s.source.Poll(ctx)
+		if err != nil {
+			nlog.Core().Error("poll control plane failed", "error", err)
+			s.pullBackoff.onFailure()
+			return
+		}
+		s.pullBackoff.onSuccess()
 
-	s.pullBackoff.onSuccess()
+		result := pullResult{certChanged: certChanged}
+		if snapshot.Config != nil {
+			result.config = snapshot.Config
+			result.configHash = computeConfigHash(snapshot.Config)
+			if result.configHash == currentConfigHash && !certChanged {
+				result.config = nil
+			}
+		}
+		if snapshot.Users != nil {
+			result.users = snapshot.Users
+			result.userHash = computeUserHash(snapshot.Users)
+		}
 
+		select {
+		case s.pullResults <- result:
+		case <-ctx.Done():
+		}
+	}()
+}
+
+// applyPullResult processes the result of an async pullViaAPI on the main goroutine.
+func (s *Service) applyPullResult(ctx context.Context, result pullResult) {
 	configChanged := false
 
-	if s.cert.CertRenewed() {
-		slog.Info("certificate renewed, kernel restart needed")
+	if result.certChanged {
+		nlog.Core().Info("certificate renewed, kernel restart needed")
 		configChanged = true
 	}
 
-	if config != nil {
-		newConfigHash := computeConfigHash(config)
-		if s.lastConfigHash != newConfigHash {
+	if result.config != nil {
+		configChanged = true
+		// Initialize or update node logger
+		if s.nodeLog == nil {
+			s.nodeLog = nlog.ForNode(result.config.Protocol, result.config.ServerPort)
+		}
+		s.nodeLog.Info(fmt.Sprintf("config updated, %d users", len(s.lastUsers)))
+		s.metricsMu.Lock()
+		s.lastConfig = result.config
+		s.metricsMu.Unlock()
+		s.lastConfigHash = result.configHash
+		if s.applyRemoteOverrides(ctx, result.config) {
 			configChanged = true
-			slog.Info("config updated from panel",
-				"protocol", config.Protocol, "port", config.ServerPort)
-			s.lastConfig = config
-			s.lastConfigHash = newConfigHash
-			// Apply kernel overrides and cert updates from REST pull
-			if s.applyRemoteOverrides(ctx, config) {
-				configChanged = true // Restart kernel if cert paths changed
-			}
 		}
 	}
 
-	if users != nil {
-		newHash := computeUserHash(users)
-		usersChanged := newHash != s.lastUserHash
+	if result.users != nil {
+		usersChanged := result.userHash != s.lastUserHash
 
 		if usersChanged && !configChanged {
-			s.applyUserUpdate(ctx, users, newHash)
+			s.applyUserUpdate(ctx, result.users, result.userHash)
 		} else if usersChanged {
-			// Config is also changing — Start will restart the kernel with the
-			// updated user list, so skip the intermediate UpdateUsers.
-			s.updateUserState(users)
+			s.updateUserState(result.users)
 		}
 	}
 
@@ -710,14 +724,43 @@ func (s *Service) pullViaAPI(ctx context.Context) {
 
 // ─── User state helpers ─────────────────────────────────────────────────────
 
-// updateUserState is the single point that refreshes limiter, speedTracker,
-// and the cached user list/hash. Every code path that changes the user set
-// MUST go through here to keep the three data structures in sync.
-func (s *Service) updateUserState(users []panel.User) {
+func (s *Service) updateUserState(users []model.UserSpec) {
+	if users == nil {
+		users = []model.UserSpec{}
+	}
+	_, _ = s.prepareUserState(users)
+}
+
+func (s *Service) prepareUserState(users []model.UserSpec) (prevUsers []model.UserSpec, prevHash string) {
+	if users == nil {
+		users = []model.UserSpec{}
+	}
+
+	s.metricsMu.RLock()
+	prevUsers = append([]model.UserSpec(nil), s.lastUsers...)
+	s.metricsMu.RUnlock()
+	prevHash = s.lastUserHash
+
 	s.limiter.UpdateUsers(users)
 	s.speedTracker.UpdateBuckets()
-	s.lastUsers = users
+
+	s.metricsMu.Lock()
+	s.lastUsers = append([]model.UserSpec(nil), users...)
+	s.metricsMu.Unlock()
 	s.lastUserHash = computeUserHash(users)
+	return prevUsers, prevHash
+}
+
+func (s *Service) restoreUserState(users []model.UserSpec, hash string) {
+	if users == nil {
+		users = []model.UserSpec{}
+	}
+	s.limiter.UpdateUsers(users)
+	s.speedTracker.UpdateBuckets()
+	s.metricsMu.Lock()
+	s.lastUsers = append([]model.UserSpec(nil), users...)
+	s.metricsMu.Unlock()
+	s.lastUserHash = hash
 }
 
 // startKernel starts (or restarts) the kernel with the given config/users and
@@ -729,7 +772,7 @@ func (s *Service) startKernel(nc *panel.NodeConfig, users []panel.User) bool {
 	}
 
 	if err := s.kernel.Start(nc, users, s.cert.CertFile(), s.cert.KeyFile()); err != nil {
-		slog.Error("failed to start kernel", "error", err)
+		nlog.Core().Error("failed to start kernel", "error", err)
 		return false
 	}
 
@@ -763,80 +806,115 @@ func (s *Service) ensureRunning() bool {
 
 // applyUserUpdate replaces the full user set and hot-swaps the kernel.
 // Called from WS sync.users and REST polling.
-func (s *Service) applyUserUpdate(ctx context.Context, users []panel.User, newHash string) {
-	// Update limiter/speed state first so even if kernel ops fail,
-	// the in-memory limits are already correct.
-	s.updateUserState(users)
-
+func (s *Service) applyUserUpdate(ctx context.Context, users []model.UserSpec, newHash string) {
 	if !s.ensureRunning() {
 		return
 	}
 
+	prevUsers, prevHash := s.prepareUserState(users)
 	added, removed, err := s.kernel.UpdateUsers(users)
 	if err != nil {
-		slog.Warn("UpdateUsers failed, falling back to full restart", "error", err)
-		s.startKernel(s.lastConfig, users)
+		nlog.Core().Warn(fmt.Sprintf("UpdateUsers failed, restarting kernel: %v", err))
+		if !s.startKernel(s.lastConfig, users) {
+			s.restoreUserState(prevUsers, prevHash)
+		}
 		return
 	}
-	slog.Info("users updated via kernel", "added", added, "removed", removed)
+	if newHash != "" {
+		s.lastUserHash = newHash
+	}
+	if s.nodeLog != nil && (added > 0 || removed > 0) {
+		s.nodeLog.Info(fmt.Sprintf("users updated: +%d -%d", added, removed))
+	}
 }
 
 // applyUserDelta applies an incremental user change (add or remove) directly
-// via the kernel's atomic user API.
-func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers []panel.User) {
+// via the kernel's atomic user API. Kernel updates run before updateUserState.
+func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers []model.UserSpec) {
 	switch action {
 	case "add":
+		// Defensive check for empty or nil deltaUsers
+		if deltaUsers == nil || len(deltaUsers) == 0 {
+			return
+		}
 		merged := mergeUsers(s.lastUsers, deltaUsers)
-		s.updateUserState(merged)
 
 		if !s.ensureRunning() {
 			return
 		}
 
+		for _, delta := range deltaUsers {
+			for _, old := range s.lastUsers {
+				if old.ID == delta.ID && old.UUID != delta.UUID {
+					s.kernel.RemoveUsers([]model.UserSpec{old})
+					break
+				}
+			}
+		}
+
+		prevUsers, prevHash := s.prepareUserState(merged)
 		added, err := s.kernel.AddUsers(deltaUsers)
 		if err != nil {
-			slog.Warn("AddUsers failed, falling back to full UpdateUsers", "error", err)
+			nlog.Core().Warn(fmt.Sprintf("AddUsers failed: %v, falling back to UpdateUsers", err))
 			if _, _, err := s.kernel.UpdateUsers(merged); err != nil {
-				slog.Error("UpdateUsers fallback also failed", "error", err)
+				nlog.Core().Error(fmt.Sprintf("UpdateUsers fallback failed: %v", err))
+				s.restoreUserState(prevUsers, prevHash)
+				return
 			}
-		} else {
-			slog.Info("users added via kernel", "added", added)
+		}
+		if s.nodeLog != nil && added > 0 {
+			s.nodeLog.Info(fmt.Sprintf("users added: +%d", added))
 		}
 
 	case "remove":
+		// Defensive check for empty or nil deltaUsers
+		if deltaUsers == nil || len(deltaUsers) == 0 {
+			return
+		}
 		filtered := subtractUsers(s.lastUsers, deltaUsers)
-		s.updateUserState(filtered)
 
 		if !s.kernel.IsRunning() {
 			return
 		}
 
+		prevUsers, prevHash := s.prepareUserState(filtered)
 		removed, err := s.kernel.RemoveUsers(deltaUsers)
 		if err != nil {
-			slog.Warn("RemoveUsers failed, falling back to full UpdateUsers", "error", err)
+			nlog.Core().Warn(fmt.Sprintf("RemoveUsers failed: %v, falling back to UpdateUsers", err))
 			if _, _, err := s.kernel.UpdateUsers(filtered); err != nil {
-				slog.Error("UpdateUsers fallback also failed", "error", err)
+				nlog.Core().Error(fmt.Sprintf("UpdateUsers fallback failed: %v", err))
+				s.restoreUserState(prevUsers, prevHash)
+				return
 			}
-		} else {
-			slog.Info("users removed via kernel", "removed", removed)
+		}
+		if s.nodeLog != nil && removed > 0 {
+			s.nodeLog.Info(fmt.Sprintf("users removed: -%d", removed))
 		}
 
 	default:
-		slog.Warn("ws: unknown user delta action", "action", action)
+		nlog.Core().Warn(fmt.Sprintf("unknown user delta action: %s", action))
 	}
 }
 
 // mergeUsers overlays deltaUsers onto base (keyed by ID). New users are
 // appended, existing users have their properties overwritten.
-func mergeUsers(base, delta []panel.User) []panel.User {
-	m := make(map[int]panel.User, len(base))
+func mergeUsers(base, delta []model.UserSpec) []model.UserSpec {
+	// Handle nil slices
+	if base == nil {
+		base = []model.UserSpec{}
+	}
+	if delta == nil {
+		return base
+	}
+
+	m := make(map[int]model.UserSpec, len(base))
 	for _, u := range base {
 		m[u.ID] = u
 	}
 	for _, u := range delta {
 		m[u.ID] = u
 	}
-	out := make([]panel.User, 0, len(m))
+	out := make([]model.UserSpec, 0, len(m))
 	for _, u := range m {
 		out = append(out, u)
 	}
@@ -844,12 +922,18 @@ func mergeUsers(base, delta []panel.User) []panel.User {
 }
 
 // subtractUsers returns base with all users in delta removed.
-func subtractUsers(base, delta []panel.User) []panel.User {
+func subtractUsers(base, delta []model.UserSpec) []model.UserSpec {
+	if base == nil {
+		return nil
+	}
+	if delta == nil || len(delta) == 0 {
+		return base
+	}
 	removeSet := make(map[int]struct{}, len(delta))
 	for _, u := range delta {
 		removeSet[u.ID] = struct{}{}
 	}
-	out := make([]panel.User, 0, len(base))
+	out := make([]model.UserSpec, 0, len(base))
 	for _, u := range base {
 		if _, ok := removeSet[u.ID]; !ok {
 			out = append(out, u)
@@ -867,7 +951,6 @@ func (s *Service) applyChanges(ctx context.Context, configChanged, usersChanged 
 
 	if s.lastConfig == nil || len(s.lastUsers) == 0 {
 		if len(s.lastUsers) == 0 {
-			slog.Warn("no users, stopping kernel")
 			s.kernel.Stop()
 			s.appliedState.Users = nil
 		}
@@ -882,7 +965,7 @@ func (s *Service) applyChanges(ctx context.Context, configChanged, usersChanged 
 			return
 		}
 		if err := s.kernel.Reload(s.lastConfig, s.lastUsers, s.cert.CertFile(), s.cert.KeyFile()); err != nil {
-			slog.Warn("reload failed, falling back to full restart", "error", err)
+			nlog.Core().Warn(fmt.Sprintf("reload failed, restarting: %v", err))
 			s.startKernel(s.lastConfig, s.lastUsers)
 		} else {
 			s.appliedState.Config = s.lastConfig
@@ -895,44 +978,42 @@ func (s *Service) applyChanges(ctx context.Context, configChanged, usersChanged 
 	}
 }
 
-// updateUserState is the single point that refreshes limiter, speedTracker,
-
 func (s *Service) trackAndEnforce(ctx context.Context) {
 	if !s.kernel.IsRunning() {
 		return
 	}
 
-	conns, err := s.kernel.GetConnections(ctx)
+	traffic, aliveIPs, connCount, err := s.kernel.GetUserTraffic(ctx)
 	if err != nil {
-		slog.Debug("get connections failed", "error", err)
+		nlog.Core().Debug("get user traffic failed", "error", err)
 		return
 	}
 
-	s.tracker.Process(conns)
-	s.tracker.LogStats()
-	slog.Debug("kernel connection snapshot", "count", len(conns))
+	s.tracker.Process(traffic, aliveIPs, connCount)
 
-	kicks := s.limiter.Check(conns)
-	s.executeKicks(ctx, kicks)
-}
-
-func (s *Service) executeKicks(ctx context.Context, kicks []limiter.KickAction) {
-	for _, kick := range kicks {
-		slog.Info("kicking connection",
-			"user_id", kick.UserID,
-			"conn_id", kick.ConnID,
-			"reason", kick.Reason,
-		)
-		if err := s.kernel.CloseConnection(ctx, kick.ConnID); err != nil {
-			slog.Error("failed to close connection", "conn_id", kick.ConnID, "error", err)
+	// Only log stats if there's actual traffic or connections
+	if connCount > 0 || len(traffic) > 0 {
+		if s.nodeLog != nil {
+			s.nodeLog.Debug(fmt.Sprintf("tracker: %d conns, %d users online", connCount, len(traffic)))
+		} else {
+			nlog.TrackerStats(connCount, len(traffic))
 		}
 	}
 }
 
-// pushReport sends consolidated traffic + alive + status to the panel
-func (s *Service) pushReport() {
+// pushReportAsync sends the report in a background goroutine so the select
+// loop is never blocked by slow HTTP. Only one push runs at a time.
+func (s *Service) pushReportAsync() {
+	if !s.sink.SupportsReporting() {
+		return
+	}
+	if !s.pushActive.CompareAndSwap(false, true) {
+		nlog.Core().Debug("push already in progress, skipping")
+		return
+	}
 	if s.pushBackoff.shouldSkip() {
-		slog.Debug("skipping report due to backoff")
+		nlog.Core().Debug("skipping report due to backoff")
+		s.pushActive.Store(false)
 		return
 	}
 
@@ -940,38 +1021,49 @@ func (s *Service) pushReport() {
 	aliveIPs := s.tracker.FlushAliveIPs()
 	online := s.tracker.CurrentOnline()
 	status := monitor.Collect()
-
 	metrics := s.buildMetrics(status)
 	metrics["kernel_status"] = s.kernel.IsRunning()
 
-	// Always report even if no traffic, to maintain heartbeats and status.
-	if err := s.panel.Report(
-		traffic, aliveIPs, online,
-		status.CPU,
-		[2]uint64{status.MemTotal, status.MemUsed},
-		[2]uint64{status.SwapTotal, status.SwapUsed},
-		[2]uint64{status.DiskTotal, status.DiskUsed},
-		metrics,
-	); err != nil {
-		slog.Error("failed to push report", "error", err)
-		if len(traffic) > 0 {
-			s.tracker.RestoreTraffic(traffic)
+	go func() {
+		defer s.pushActive.Store(false)
+		if err := s.sink.Report(controlplane.ReportPayload{Traffic: traffic, Alive: aliveIPs, Online: online, CPU: status.CPU, Mem: [2]uint64{status.MemTotal, status.MemUsed}, Swap: [2]uint64{status.SwapTotal, status.SwapUsed}, Disk: [2]uint64{status.DiskTotal, status.DiskUsed}, Metrics: metrics}); err != nil {
+			nlog.Core().Error("failed to push report", "error", err)
+			if len(traffic) > 0 { s.tracker.RestoreTraffic(traffic) }
+			if len(aliveIPs) > 0 { s.tracker.RestoreAliveIPs(aliveIPs) }
+			s.pushBackoff.onFailure()
+			return
 		}
-		if len(aliveIPs) > 0 {
-			s.tracker.RestoreAliveIPs(aliveIPs)
-		}
-		s.pushBackoff.onFailure()
+		s.pushBackoff.onSuccess()
+		nlog.ReportPushed(len(traffic), len(online))
+	}()
+}
+
+// pushReportSync is used only during shutdown to ensure final data is sent.
+func (s *Service) pushReportSync() {
+	if !s.sink.SupportsReporting() {
 		return
 	}
+	traffic := s.tracker.FlushTraffic()
+	aliveIPs := s.tracker.FlushAliveIPs()
+	online := s.tracker.CurrentOnline()
+	status := monitor.Collect()
+	metrics := s.buildMetrics(status)
+	metrics["kernel_status"] = s.kernel.IsRunning()
 
-	s.pushBackoff.onSuccess()
-	slog.Info("report pushed", "users_with_traffic", len(traffic), "online", len(online))
+	if err := s.sink.Report(controlplane.ReportPayload{Traffic: traffic, Alive: aliveIPs, Online: online, CPU: status.CPU, Mem: [2]uint64{status.MemTotal, status.MemUsed}, Swap: [2]uint64{status.SwapTotal, status.SwapUsed}, Disk: [2]uint64{status.DiskTotal, status.DiskUsed}, Metrics: metrics}); err != nil {
+		nlog.Core().Error("failed to push final report", "error", err)
+	}
 }
 
 // buildMetrics aggregates node-level metrics to be reported to the panel.
 // This includes active connections, per-core CPU, GC stats, API call stats,
 // WebSocket status, and limiter hit counts.
 func (s *Service) buildMetrics(status monitor.Status) map[string]interface{} {
+	s.metricsMu.RLock()
+	lastUsers := s.lastUsers
+	wsClient := s.wsClient
+	s.metricsMu.RUnlock()
+
 	m := make(map[string]interface{})
 	online := s.tracker.CurrentOnline()
 
@@ -982,7 +1074,7 @@ func (s *Service) buildMetrics(status monitor.Status) map[string]interface{} {
 	m["active_connections"] = s.tracker.ActiveConnections()
 	m["total_connections"] = s.tracker.TotalConnections()
 	m["active_users"] = len(online)
-	m["total_users"] = len(s.lastUsers)
+	m["total_users"] = len(lastUsers)
 
 	// Speed
 	m["inbound_speed"] = s.tracker.InboundSpeed()
@@ -1012,15 +1104,15 @@ func (s *Service) buildMetrics(status monitor.Status) map[string]interface{} {
 	}
 
 	// API metrics.
-	api := s.panel.SnapshotMetrics()
+	api := s.source.Metrics()
 	m["api"] = map[string]interface{}{
 		"success": api.Success,
 		"failure": api.Failure,
 	}
 
 	// WebSocket status.
-	wsEnabled := s.wsClient != nil
-	wsConnected := wsEnabled && s.wsClient.IsConnected()
+	wsEnabled := wsClient != nil
+	wsConnected := wsEnabled && wsClient.IsConnected()
 	m["ws"] = map[string]interface{}{
 		"enabled":   wsEnabled,
 		"connected": wsConnected,
@@ -1039,7 +1131,7 @@ func (s *Service) buildMetrics(status monitor.Status) map[string]interface{} {
 // computeConfigHash returns a deterministic hash of the node config.
 // It uses JSON marshaling to ensure all fields are captured, ensuring that
 // any configuration change correctly triggers a kernel reload.
-func computeConfigHash(cfg *panel.NodeConfig) string {
+func computeConfigHash(cfg *model.NodeSpec) string {
 	if cfg == nil {
 		return ""
 	}
@@ -1053,8 +1145,8 @@ func computeConfigHash(cfg *panel.NodeConfig) string {
 
 // computeUserHash returns a deterministic hash of the user list for change detection.
 // Uses direct byte encoding instead of binary.Write to avoid reflection overhead.
-func computeUserHash(users []panel.User) string {
-	sorted := make([]panel.User, len(users))
+func computeUserHash(users []model.UserSpec) string {
+	sorted := make([]model.UserSpec, len(users))
 	copy(sorted, users)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
 
@@ -1070,4 +1162,27 @@ func computeUserHash(users []panel.User) string {
 		h.Write(buf[:])
 	}
 	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+// ─── Device management ──────────────────────────────────────────────────
+
+// sendDeviceBatch reports local device snapshot to panel via WS.
+func (s *Service) sendDeviceBatch() {
+	if s.wsClient == nil || !s.wsClient.IsConnected() {
+		return
+	}
+
+	devices := s.tracker.FlushAliveIPs()
+	// FlushAliveIPs returns nil if no changes since last flush
+	if devices == nil {
+		nlog.Core().Debug("device snapshot unchanged, skipping")
+		return
+	}
+	s.sink.ReportDevices(s.wsClient, devices)
+	nlog.Core().Debug("device snapshot sent", "users", len(devices))
+}
+
+// reportDevices periodically reports device snapshot to panel.
+func (s *Service) reportDevices() {
+	s.sendDeviceBatch()
 }

@@ -1,18 +1,26 @@
 package xray
 
 import (
+	"sync/atomic"
 	"testing"
 
 	"github.com/micah123321/mi-node/internal/panel"
 )
 
-func TestLimitDispatcher_DeviceLimitCheck(t *testing.T) {
-	ld := &LimitDispatcher{
-		conns:   make(map[string]*dispatchedConn),
-		userIPs: make(map[string]map[string]int),
+func newTestDispatcher() *LimitDispatcher {
+	return &LimitDispatcher{
+		limitedIPs: make(map[string]map[string]int),
 	}
+}
 
-	users := []panel.User{
+type nopReader struct{}
+
+func (nopReader) ReadMultiBuffer() (buf.MultiBuffer, error) { return nil, nil }
+
+func TestLimitDispatcher_DeviceLimitCheck(t *testing.T) {
+	ld := newTestDispatcher()
+
+	users := []model.UserSpec{
 		{ID: 1, UUID: "uuid-1", DeviceLimit: 2, SpeedLimit: 0},
 		{ID: 2, UUID: "uuid-2", DeviceLimit: 0, SpeedLimit: 10},
 	}
@@ -65,10 +73,7 @@ func TestLimitDispatcher_DeviceLimitCheck(t *testing.T) {
 }
 
 func TestLimitDispatcher_DelConn(t *testing.T) {
-	ld := &LimitDispatcher{
-		conns:   make(map[string]*dispatchedConn),
-		userIPs: make(map[string]map[string]int),
-	}
+	ld := newTestDispatcher()
 
 	email := userEmail(1)
 	deviceLimits := map[string]int{email: 2}
@@ -92,113 +97,137 @@ func TestLimitDispatcher_DelConn(t *testing.T) {
 	}
 }
 
-func TestLimitDispatcher_SpeedBucket(t *testing.T) {
-	ld := &LimitDispatcher{
-		conns:   make(map[string]*dispatchedConn),
-		userIPs: make(map[string]map[string]int),
-	}
+func TestLimitDispatcher_GetConnectionState(t *testing.T) {
+	ld := newTestDispatcher()
 
 	email1 := userEmail(1)
 	email2 := userEmail(2)
+	ld.UpdateLimits(map[string]int{email1: 1, email2: 2}, nil, nil)
 
-	speedLimits := map[string]int{email1: 10} // 10 Mbps
-	ld.UpdateLimits(map[string]int{email1: 1, email2: 2}, nil, speedLimits)
+	ic1 := &ipCounter{}
+	r1 := &atomic.Int64{}
+	r1.Store(1)
+	ic1.ips.Store("1.1.1.1", r1)
+	r2 := &atomic.Int64{}
+	r2.Store(1)
+	ic1.ips.Store("2.2.2.2", r2)
+	ld.unlimitedIPs.Store(email1, ic1)
 
-	// User 1 has speed limit — should get a limiter
-	limiter := ld.getBucket(email1)
-	if limiter == nil {
-		t.Error("user with speed limit should get a limiter")
-	}
+	ic2 := &ipCounter{}
+	r3 := &atomic.Int64{}
+	r3.Store(1)
+	ic2.ips.Store("3.3.3.3", r3)
+	ld.unlimitedIPs.Store(email2, ic2)
 
-	// Same user should get the same limiter (cached)
-	limiter2 := ld.getBucket(email1)
-	if limiter != limiter2 {
-		t.Error("same user should get cached limiter")
-	}
+	ld.connCount.Store(5)
 
-	// User 2 has no speed limit — should get nil
-	limiter3 := ld.getBucket(email2)
-	if limiter3 != nil {
-		t.Error("user without speed limit should get nil")
-	}
-}
+	aliveIPs, connCount := ld.GetConnectionState()
 
-func TestLimitDispatcher_Snapshot(t *testing.T) {
-	ld := &LimitDispatcher{
-		conns:   make(map[string]*dispatchedConn),
-		userIPs: make(map[string]map[string]int),
+	if connCount != 5 {
+		t.Errorf("expected connCount=5, got %d", connCount)
 	}
-
-	// Add some connections
-	ld.conns["conn-1"] = &dispatchedConn{
-		id: "conn-1", email: "user@1", sourceIP: "1.1.1.1", userID: 1,
+	if len(aliveIPs[1]) != 2 {
+		t.Errorf("user 1 IPs: got %d, want 2", len(aliveIPs[1]))
 	}
-	ld.conns["conn-2"] = &dispatchedConn{
-		id: "conn-2", email: "user@2", sourceIP: "2.2.2.2", userID: 2,
-	}
-	ld.conns["conn-1"].upload.Store(1000)
-	ld.conns["conn-1"].download.Store(2000)
-
-	snapshot := ld.Snapshot()
-	if len(snapshot) != 2 {
-		t.Fatalf("expected 2 connections, got %d", len(snapshot))
-	}
-
-	found := false
-	for _, c := range snapshot {
-		if c.ID == "conn-1" {
-			found = true
-			if c.UserID != 1 || c.SourceIP != "1.1.1.1" || c.Upload != 1000 || c.Download != 2000 {
-				t.Errorf("unexpected connection data: %+v", c)
-			}
-		}
-	}
-	if !found {
-		t.Error("conn-1 not found in snapshot")
-	}
-}
-
-func TestLimitDispatcher_CloseConn(t *testing.T) {
-	ld := &LimitDispatcher{
-		conns:   make(map[string]*dispatchedConn),
-		userIPs: make(map[string]map[string]int),
-	}
-
-	email := userEmail(1)
-	ld.userIPs[email] = map[string]int{"1.1.1.1": 1}
-	ld.conns["conn-1"] = &dispatchedConn{
-		id: "conn-1", email: email, sourceIP: "1.1.1.1", userID: 1,
-	}
-
-	ok := ld.CloseConn("conn-1")
-	if !ok {
-		t.Error("CloseConn should return true for existing connection")
-	}
-
-	if len(ld.conns) != 0 {
-		t.Error("connection should be removed after close")
-	}
-
-	ok = ld.CloseConn("nonexistent")
-	if ok {
-		t.Error("CloseConn should return false for nonexistent connection")
+	if len(aliveIPs[2]) != 1 {
+		t.Errorf("user 2 IPs: got %d, want 1", len(aliveIPs[2]))
 	}
 }
 
 func TestLimitDispatcher_ResetConns(t *testing.T) {
-	ld := &LimitDispatcher{
-		conns:   make(map[string]*dispatchedConn),
-		userIPs: make(map[string]map[string]int),
-	}
-	ld.conns["c1"] = &dispatchedConn{id: "c1"}
-	ld.userIPs["user@1"] = map[string]int{"1.1.1.1": 1}
+	ld := newTestDispatcher()
+
+	ld.mu.Lock()
+	ld.limitedIPs["user@1"] = map[string]int{"1.1.1.1": 1}
+	ld.mu.Unlock()
+	ld.connCount.Store(3)
 
 	ld.ResetConns()
 
-	if len(ld.conns) != 0 {
-		t.Error("conns should be empty after reset")
+	ld.mu.RLock()
+	ipCount := len(ld.limitedIPs)
+	ld.mu.RUnlock()
+	if ipCount != 0 {
+		t.Error("limitedIPs should be empty after reset")
 	}
-	if len(ld.userIPs) != 0 {
-		t.Error("userIPs should be empty after reset")
+
+	if ld.connCount.Load() != 0 {
+		t.Error("connCount should be 0 after reset")
+	}
+}
+
+func TestLimitDispatcher_UnlimitedUserFastPath(t *testing.T) {
+	ld := newTestDispatcher()
+
+	email := userEmail(1)
+	// No device limit set for this user
+	ld.UpdateLimits(map[string]int{email: 1}, nil, nil)
+
+	// Should use fast path (sync.Map), no lock needed
+	for i := 0; i < 100; i++ {
+		ip := "10.0.0." + string(rune('0'+i%10))
+		if ld.checkDeviceLimit(email, ip, true) {
+			t.Errorf("unlimited user should always be allowed (ip=%s)", ip)
+		}
+	}
+
+	// Verify IPs are tracked in unlimitedIPs
+	v, ok := ld.unlimitedIPs.Load(email)
+	if !ok {
+		t.Error("unlimited user should have entry in unlimitedIPs")
+	}
+	ic := v.(*ipCounter)
+	ips := ic.aliveIPs()
+	if len(ips) == 0 {
+		t.Error("should have tracked some IPs")
+	}
+}
+
+
+func TestLimitDispatcher_TrackLinkPreservesReader(t *testing.T) {
+	ld := newTestDispatcher()
+	email := userEmail(1)
+	ld.UpdateLimits(map[string]int{email: 1}, map[string]int{email: 1}, nil)
+
+	origReader := nopReader{}
+	origWriter := &closeTrackingWriter{Writer: buf.Discard, onClose: func() {}}
+	link := &transport.Link{Reader: origReader, Writer: origWriter}
+
+	ld.trackLink(link, email, "1.1.1.1", true)
+
+	if link.Reader != origReader {
+		t.Fatal("trackLink must not replace link.Reader")
+	}
+	if link.Writer == origWriter {
+		t.Fatal("trackLink should wrap link.Writer for lifecycle callbacks")
+	}
+}
+
+func TestLimitDispatcher_CloseTrackingWriterReleasesConn(t *testing.T) {
+	ld := newTestDispatcher()
+	email := userEmail(1)
+	ld.UpdateLimits(map[string]int{email: 1}, map[string]int{email: 1}, nil)
+	if ld.checkDeviceLimit(email, "1.1.1.1", true) {
+		t.Fatal("first connection should be allowed")
+	}
+
+	link := &transport.Link{Reader: nopReader{}, Writer: buf.Discard}
+	ld.trackLink(link, email, "1.1.1.1", true)
+
+	if got := ld.connCount.Load(); got != 1 {
+		t.Fatalf("expected connCount=1 after tracking, got %d", got)
+	}
+	cw, ok := link.Writer.(*closeTrackingWriter)
+	if !ok {
+		t.Fatal("expected closeTrackingWriter wrapper")
+	}
+	if err := cw.Close(); err != nil {
+		t.Fatalf("closeTrackingWriter.Close() error = %v", err)
+	}
+	if got := ld.connCount.Load(); got != 0 {
+		t.Fatalf("expected connCount=0 after close, got %d", got)
+	}
+	if ld.checkDeviceLimit(email, "2.2.2.2", true) {
+		t.Fatal("device slot should be released after writer close")
 	}
 }

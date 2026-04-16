@@ -1,8 +1,8 @@
 package xray
 
 import (
+	"encoding/base64"
 	"fmt"
-	"log/slog"
 	"strings"
 
 	"github.com/micah123321/mi-node/internal/config"
@@ -13,7 +13,7 @@ import (
 // M is a shorthand for building JSON-like maps
 type M = map[string]interface{}
 
-func buildConfig(kcfg config.KernelConfig, nc *panel.NodeConfig, users []panel.User, certFile, keyFile string) M {
+func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
 	var outbounds []M
 	tags := make(map[string]bool)
 
@@ -50,8 +50,8 @@ func buildConfig(kcfg config.KernelConfig, nc *panel.NodeConfig, users []panel.U
 	cfg := M{
 		"log": M{
 			"loglevel": xrayLogLevel(kcfg.LogLevel),
-			"error":    "stdout",
-			"access":   "stdout",
+			"error":    "",
+			"access":   "",
 		},
 		"stats": M{},
 		"policy": M{
@@ -81,9 +81,9 @@ func buildConfig(kcfg config.KernelConfig, nc *panel.NodeConfig, users []panel.U
 	if inbound != nil {
 		cfg["inbounds"] = []M{inbound}
 	} else {
-		slog.Warn("xray: unsupported protocol, no inbound configured — node will not accept connections",
+		nlog.Core().Warn("xray: unsupported protocol, no inbound configured — node will not accept connections",
 			"protocol", nc.Protocol,
-			"supported", "vmess, vless, trojan, shadowsocks, socks, http")
+			"supported", "vmess, vless, trojan, shadowsocks, hysteria, socks, http")
 	}
 
 	// Merge panel routes and static config routes
@@ -96,7 +96,7 @@ func buildConfig(kcfg config.KernelConfig, nc *panel.NodeConfig, users []panel.U
 // outboundConfigToXray converts a structured OutboundConfig (from the panel)
 // into an Xray outbound object. Xray uses a nested layout where protocol-
 // specific fields go inside a "settings" key, and chain proxying uses "proxySettings".
-func outboundConfigToXray(oc panel.OutboundConfig) M {
+func outboundConfigToXray(oc model.OutboundConfig) M {
 	m := M{
 		"protocol": oc.Protocol,
 		"tag":      oc.Tag,
@@ -204,7 +204,7 @@ func buildDefaultProtectionRules() []M {
 func mergeCustomXray(cfg M, kcfg config.KernelConfig) {
 	custom, err := kernel.LoadCustomConfig(kcfg.CustomConfig)
 	if err != nil {
-		slog.Error("failed to load custom xray config", "error", err)
+		nlog.Core().Error("failed to load custom xray config", "error", err)
 		return
 	}
 	if custom == nil {
@@ -283,7 +283,7 @@ func xrayLogLevel(singboxLevel string) string {
 	}
 }
 
-func buildInbound(nc *panel.NodeConfig, users []panel.User, certFile, keyFile string) M {
+func buildInbound(nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
 	listenAddr := "::"
 	if nc.ListenIP != "" {
 		listenAddr = nc.ListenIP
@@ -313,6 +313,8 @@ func buildInbound(nc *panel.NodeConfig, users []panel.User, certFile, keyFile st
 		return buildSocks(base, users)
 	case "http":
 		return buildHTTP(base, nc, users, certFile, keyFile)
+	case "hysteria":
+		return buildHysteria(base, nc, users, certFile, keyFile)
 	default:
 		return nil
 	}
@@ -324,7 +326,7 @@ func userEmail(userID int) string {
 	return fmt.Sprintf("user@%d", userID)
 }
 
-func buildVMess(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyFile string) M {
+func buildVMess(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
 	clients := make([]M, 0, len(users))
 	for _, u := range users {
 		clients = append(clients, M{
@@ -339,7 +341,7 @@ func buildVMess(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyF
 	return base
 }
 
-func buildVLESS(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyFile string) M {
+func buildVLESS(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
 	clients := make([]M, 0, len(users))
 	for _, u := range users {
 		client := M{
@@ -351,22 +353,27 @@ func buildVLESS(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyF
 		}
 		clients = append(clients, client)
 	}
+	decryption := "none"
+	if nc.Decryption != "" {
+		decryption = nc.Decryption
+	}
 	base["settings"] = M{
 		"clients":    clients,
-		"decryption": "none",
+		"decryption": decryption,
 	}
 
 	applyStreamSettings(base, nc, certFile, keyFile)
 	return base
 }
 
-func buildTrojan(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyFile string) M {
-	clients := make([]M, 0, len(users))
-	for _, u := range users {
-		clients = append(clients, M{
+func buildTrojan(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
+	clients := make([]M, len(users))
+	for i := range users {
+		u := &users[i]
+		clients[i] = M{
 			"password": u.UUID,
 			"email":    userEmail(u.ID),
-		})
+		}
 	}
 	base["settings"] = M{"clients": clients}
 
@@ -401,24 +408,50 @@ func buildShadowsocks(base M, nc *panel.NodeConfig, users []panel.User) M {
 		return base
 	}
 
-	// Multi-user mode for 2022-blake3 ciphers
 	clients := make([]M, 0, len(users))
-	for _, u := range users {
-		clients = append(clients, M{
-			"password": u.UUID,
-			"email":    userEmail(u.ID),
-		})
-	}
-	base["settings"] = M{
-		"method":   nc.Cipher,
-		"password": nc.ServerKey,
-		"clients":  clients,
-		"network":  "tcp,udp",
+
+	if isSS2022 {
+		// SS2022: server key at top level, per-user key must be Base64 of fixed-length raw bytes.
+		// Only blake3-aes-* supports multi-user in Xray; chacha20 variant is single-user only.
+		rawBuf := make([]byte, ss2022.size)
+		for i := range users {
+			u := &users[i]
+			for j := range rawBuf {
+				rawBuf[j] = 0
+			}
+			copy(rawBuf, u.UUID)
+			clients = append(clients, M{
+				"password": base64.StdEncoding.EncodeToString(rawBuf),
+				"email":    userEmail(u.ID),
+			})
+		}
+		base["settings"] = M{
+			"method":   nc.Cipher,
+			"password": nc.ServerKey,
+			"clients":  clients,
+			"network":  "tcp,udp",
+		}
+	} else {
+		// Traditional ciphers: multi-user via clients array.
+		// Each entry must carry its own "method" field for Xray to parse correctly.
+		for i := range users {
+			u := &users[i]
+			clients = append(clients, M{
+				"method":   nc.Cipher,
+				"password": u.UUID,
+				"email":    userEmail(u.ID),
+			})
+		}
+		base["settings"] = M{
+			"method":  nc.Cipher,
+			"clients": clients,
+			"network": "tcp,udp",
+		}
 	}
 	return base
 }
 
-func buildSocks(base M, users []panel.User) M {
+func buildSocks(base M, users []model.UserSpec) M {
 	base["protocol"] = "socks"
 	accounts := make([]M, 0, len(users))
 	for _, u := range users {
@@ -436,7 +469,7 @@ func buildSocks(base M, users []panel.User) M {
 	return base
 }
 
-func buildHTTP(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyFile string) M {
+func buildHTTP(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
 	base["protocol"] = "http"
 	accounts := make([]M, 0, len(users))
 	for _, u := range users {
@@ -456,7 +489,67 @@ func buildHTTP(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyFi
 	return base
 }
 
-func applyStreamSettings(base M, nc *panel.NodeConfig, certFile, keyFile string) {
+// buildHysteria creates a Hysteria v2 inbound for xray-core.
+func buildHysteria(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
+	if nc.Version != 2 {
+		nlog.Core().Warn("xray: only supports hysteria v2, skipping v1 inbound")
+		return nil
+	}
+
+	clients := make([]M, 0, len(users))
+	for _, u := range users {
+		clients = append(clients, M{
+			"auth":  u.UUID,
+			"email": userEmail(u.ID),
+		})
+	}
+	base["settings"] = M{"clients": clients}
+
+	ss := M{
+		"network": "hysteria",
+		"hysteriaSettings": M{
+			"version":        nc.Version,
+			"udpIdleTimeout": 60,
+		},
+	}
+
+	if nc.UpMbps > 0 || nc.DownMbps > 0 {
+		quicParams := M{}
+		if nc.UpMbps > 0 {
+			quicParams["brutalUp"] = fmt.Sprintf("%d mbps", nc.UpMbps)
+		}
+		if nc.DownMbps > 0 {
+			quicParams["brutalDown"] = fmt.Sprintf("%d mbps", nc.DownMbps)
+		}
+		ss["finalMask"] = M{
+			"quicParams": quicParams,
+		}
+	}
+
+	if certFile != "" && keyFile != "" {
+		ss["security"] = "tls"
+		ss["tlsSettings"] = M{
+			"certificates": []M{
+				{
+					"certificateFile": certFile,
+					"keyFile":         keyFile,
+				},
+			},
+			"alpn": []string{"h3"},
+		}
+	} else {
+		nlog.Core().Warn("hysteria requires TLS certificate files; configure cert_mode (self, file, http, dns, or content)")
+	}
+
+	if nc.GetProxyProtocol() {
+		ss["sockopt"] = M{"acceptProxyProtocol": true}
+	}
+
+	base["streamSettings"] = ss
+	return base
+}
+
+func applyStreamSettings(base M, nc *model.NodeSpec, certFile, keyFile string) {
 	ss := M{}
 
 	// Network / transport
@@ -493,7 +586,9 @@ func applyStreamSettings(base M, nc *panel.NodeConfig, certFile, keyFile string)
 	case "grpc":
 		grpcSettings := M{}
 		if nc.NetworkSettings != nil {
-			if v, ok := nc.NetworkSettings["service_name"]; ok {
+			if v, ok := nc.NetworkSettings["serviceName"]; ok {
+				grpcSettings["serviceName"] = v
+			} else if v, ok := nc.NetworkSettings["service_name"]; ok {
 				grpcSettings["serviceName"] = v
 			} else if v, ok := nc.NetworkSettings["serviceName"]; ok {
 				grpcSettings["serviceName"] = v
@@ -565,7 +660,7 @@ func applyStreamSettings(base M, nc *panel.NodeConfig, certFile, keyFile string)
 	}
 
 	// Proxy Protocol
-	if nc.AcceptProxyProtocol {
+	if nc.GetProxyProtocol() {
 		sockopt, ok := base["streamSettings"].(M)["sockopt"].(M)
 		if !ok {
 			sockopt = M{}
@@ -577,7 +672,7 @@ func applyStreamSettings(base M, nc *panel.NodeConfig, certFile, keyFile string)
 	base["streamSettings"] = ss
 }
 
-func buildRealitySettings(nc *panel.NodeConfig) M {
+func buildRealitySettings(nc *model.NodeSpec) M {
 	reality := M{"show": false}
 
 	if nc.TLSSettings == nil {

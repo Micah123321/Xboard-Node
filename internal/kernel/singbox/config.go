@@ -1,8 +1,8 @@
 package singbox
 
 import (
+	"encoding/base64"
 	"fmt"
-	"log/slog"
 	"net"
 	"path/filepath"
 	"strconv"
@@ -17,7 +17,7 @@ import (
 // M is a shorthand for building JSON-like maps
 type M = map[string]interface{}
 
-func buildConfig(kcfg config.KernelConfig, nc *panel.NodeConfig, users []panel.User, certFile, keyFile string) M {
+func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
 	var outbounds []M
 	tags := make(map[string]bool)
 
@@ -88,7 +88,7 @@ func buildConfig(kcfg config.KernelConfig, nc *panel.NodeConfig, users []panel.U
 // outboundConfigToSingbox converts a structured OutboundConfig (from the panel)
 // into a sing-box outbound object. sing-box uses a flat layout where all
 // protocol-specific fields sit at the top level alongside "type" and "tag".
-func outboundConfigToSingbox(oc panel.OutboundConfig) M {
+func outboundConfigToSingbox(oc model.OutboundConfig) M {
 	m := M{
 		"type": oc.Protocol,
 		"tag":  oc.Tag,
@@ -332,7 +332,7 @@ func buildRoutes(kcfg config.KernelConfig, panelRoutes []panel.RouteRule, custom
 func mergeCustomSingbox(cfg M, kcfg config.KernelConfig) {
 	custom, err := kernel.LoadCustomConfig(kcfg.CustomConfig)
 	if err != nil {
-		slog.Error("failed to load custom sing-box config", "error", err)
+		nlog.Core().Error("failed to load custom sing-box config", "error", err)
 		return
 	}
 	if custom == nil {
@@ -407,7 +407,7 @@ func mergeCustomSingboxRoute(cfg M, customRoute map[string]any) {
 	}
 }
 
-func buildInbound(nc *panel.NodeConfig, users []panel.User, certFile, keyFile string) M {
+func buildInbound(nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
 	base := M{
 		"tag":         nc.Protocol + "-in",
 		"listen":      "::",
@@ -442,7 +442,7 @@ func buildInbound(nc *panel.NodeConfig, users []panel.User, certFile, keyFile st
 	}
 }
 
-func buildMieru(base M, nc *panel.NodeConfig, users []panel.User) M {
+func buildMieru(base M, nc *model.NodeSpec, users []model.UserSpec) M {
 	base["type"] = "mieru"
 	if nc.Transport != "" {
 		base["transport"] = nc.Transport
@@ -462,31 +462,59 @@ func buildMieru(base M, nc *panel.NodeConfig, users []panel.User) M {
 	return base
 }
 
-func buildShadowsocks(base M, nc *panel.NodeConfig, users []panel.User) M {
+type ss2022Config struct {
+	method string
+	size   int
+}
+
+var ss2022Methods = map[string]ss2022Config{
+	"2022-blake3-aes-128-gcm":       {"2022-blake3-aes-128-gcm", 16},
+	"2022-blake3-aes-256-gcm":       {"2022-blake3-aes-256-gcm", 32},
+	"2022-blake3-chacha20-poly1305": {"2022-blake3-chacha20-poly1305", 32},
+}
+
+func buildShadowsocks(base M, nc *model.NodeSpec, users []model.UserSpec) M {
 	base["type"] = "shadowsocks"
 	base["method"] = nc.Cipher
 
-	if strings.HasPrefix(nc.Cipher, "2022-blake3-") {
+	ss2022, isSS2022 := ss2022Methods[nc.Cipher]
+	if isSS2022 {
 		base["password"] = nc.ServerKey
 	}
 
-	userList := make([]M, 0, len(users))
-	for _, u := range users {
-		userList = append(userList, M{
+	userList := make([]M, len(users))
+	var rawBuf []byte
+	if isSS2022 {
+		rawBuf = make([]byte, ss2022.size)
+	}
+
+	for i := range users {
+		u := &users[i]
+		user := M{
 			"name":     u.UUID,
 			"password": u.UUID,
-		})
+		}
+
+		if isSS2022 {
+			// Reuse buffer and clear it to maintain SS2022 key integrity
+			for j := range rawBuf {
+				rawBuf[j] = 0
+			}
+			copy(rawBuf, u.UUID)
+			user["password"] = base64.StdEncoding.EncodeToString(rawBuf)
+		}
+		userList[i] = user
 	}
 	base["users"] = userList
 
 	if nc.Plugin != "" {
-		slog.Warn("sing-box shadowsocks inbound does not support plugin, ignoring", "plugin", nc.Plugin)
+		nlog.Core().Warn("sing-box shadowsocks inbound does not support plugin, ignoring", "plugin", nc.Plugin)
 	}
 
 	return base
 }
 
-func buildVMess(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyFile string) M {
+func buildVMess(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
 	base["type"] = "vmess"
 
 	userList := make([]M, 0, len(users))
@@ -500,16 +528,23 @@ func buildVMess(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyF
 	base["users"] = userList
 
 	applyTransport(base, nc)
+	applyProxyProtocol(base, nc)
 	applyMultiplex(base, nc)
 
 	if nc.TLS == 1 {
-		base["tls"] = buildTLSConfig(nc, certFile, keyFile)
+		if tls := buildTLSConfig(nc, certFile, keyFile); tls != nil {
+			base["tls"] = tls
+		}
 	}
 
 	return base
 }
 
-func buildVLESS(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyFile string) M {
+func buildVLESS(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
+	if nc.Decryption != "" && nc.Decryption != "none" {
+		nlog.Core().Warn("sing-box does not support VLESS encryption (decryption), use xray kernel for this feature")
+	}
+
 	base["type"] = "vless"
 
 	userList := make([]M, 0, len(users))
@@ -526,10 +561,13 @@ func buildVLESS(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyF
 	base["users"] = userList
 
 	applyTransport(base, nc)
+	applyProxyProtocol(base, nc)
 	applyMultiplex(base, nc)
 
 	if nc.TLS == 1 {
-		base["tls"] = buildTLSConfig(nc, certFile, keyFile)
+		if tls := buildTLSConfig(nc, certFile, keyFile); tls != nil {
+			base["tls"] = tls
+		}
 	} else if nc.TLS == 2 {
 		base["tls"] = buildRealityConfig(nc)
 	}
@@ -537,23 +575,27 @@ func buildVLESS(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyF
 	return base
 }
 
-func buildTrojan(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyFile string) M {
+func buildTrojan(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
 	base["type"] = "trojan"
 
-	userList := make([]M, 0, len(users))
-	for _, u := range users {
-		userList = append(userList, M{
+	userList := make([]M, len(users))
+	for i := range users {
+		u := &users[i]
+		userList[i] = M{
 			"name":     u.UUID,
 			"password": u.UUID,
-		})
+		}
 	}
 	base["users"] = userList
 
 	applyTransport(base, nc)
+	applyProxyProtocol(base, nc)
 	applyMultiplex(base, nc)
 
 	if nc.TLS == 1 {
-		base["tls"] = buildTLSConfig(nc, certFile, keyFile)
+		if tls := buildTLSConfig(nc, certFile, keyFile); tls != nil {
+			base["tls"] = tls
+		}
 	} else if nc.TLS == 2 {
 		base["tls"] = buildRealityConfig(nc)
 	}
@@ -566,7 +608,7 @@ func buildTrojan(base M, nc *panel.NodeConfig, users []panel.User, certFile, key
 	return base
 }
 
-func buildHysteria(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyFile string) M {
+func buildHysteria(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
 	if nc.Version == 2 {
 		base["type"] = "hysteria2"
 
@@ -605,6 +647,10 @@ func buildHysteria(base M, nc *panel.NodeConfig, users []panel.User, certFile, k
 	}
 
 	tls := buildTLSConfig(nc, certFile, keyFile)
+	if tls == nil {
+		nlog.Core().Warn("hysteria requires TLS certificate files on disk; configure cert_mode (self, file, http, dns, or content). Sing-box will not start this inbound without tls.")
+		return base
+	}
 	// Hysteria/Hysteria2 uses QUIC and requires ALPN; default to h3 if not set.
 	if _, ok := tls["alpn"]; !ok {
 		tls["alpn"] = []string{"h3"}
@@ -613,7 +659,7 @@ func buildHysteria(base M, nc *panel.NodeConfig, users []panel.User, certFile, k
 	return base
 }
 
-func buildTUIC(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyFile string) M {
+func buildTUIC(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
 	base["type"] = "tuic"
 
 	userList := make([]M, 0, len(users))
@@ -631,6 +677,10 @@ func buildTUIC(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyFi
 	}
 
 	tls := buildTLSConfig(nc, certFile, keyFile)
+	if tls == nil {
+		nlog.Core().Warn("tuic requires TLS certificate files on disk; configure cert_mode (self, file, http, dns, or content). Sing-box will not start this inbound without tls.")
+		return base
+	}
 	// TUIC requires ALPN for QUIC negotiation; default to h3 if not set by panel.
 	if _, ok := tls["alpn"]; !ok {
 		tls["alpn"] = []string{"h3"}
@@ -639,7 +689,7 @@ func buildTUIC(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyFi
 	return base
 }
 
-func buildAnyTLS(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyFile string) M {
+func buildAnyTLS(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
 	base["type"] = "anytls"
 
 	userList := make([]M, 0, len(users))
@@ -652,14 +702,18 @@ func buildAnyTLS(base M, nc *panel.NodeConfig, users []panel.User, certFile, key
 	base["users"] = userList
 
 	if nc.PaddingScheme != "" {
-		base["padding_scheme"] = string(nc.PaddingScheme)
+		base["padding_scheme"] = nc.PaddingScheme
 	}
 
-	base["tls"] = buildTLSConfig(nc, certFile, keyFile)
+	if tls := buildTLSConfig(nc, certFile, keyFile); tls != nil {
+		base["tls"] = tls
+	} else {
+		nlog.Core().Warn("anytls requires TLS certificate files on disk; configure cert_mode (self, file, http, dns, or content). Sing-box will not start this inbound without tls.")
+	}
 	return base
 }
 
-func buildNaive(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyFile string) M {
+func buildNaive(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
 	base["type"] = "naive"
 
 	userList := make([]M, 0, len(users))
@@ -672,12 +726,14 @@ func buildNaive(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyF
 	base["users"] = userList
 
 	if nc.TLS == 1 {
-		base["tls"] = buildTLSConfig(nc, certFile, keyFile)
+		if tls := buildTLSConfig(nc, certFile, keyFile); tls != nil {
+			base["tls"] = tls
+		}
 	}
 	return base
 }
 
-func buildSocks(base M, users []panel.User) M {
+func buildSocks(base M, users []model.UserSpec) M {
 	base["type"] = "socks"
 
 	userList := make([]M, 0, len(users))
@@ -691,7 +747,7 @@ func buildSocks(base M, users []panel.User) M {
 	return base
 }
 
-func buildHTTP(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyFile string) M {
+func buildHTTP(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
 	base["type"] = "http"
 
 	userList := make([]M, 0, len(users))
@@ -703,13 +759,16 @@ func buildHTTP(base M, nc *panel.NodeConfig, users []panel.User, certFile, keyFi
 	}
 	base["users"] = userList
 
+	applyProxyProtocol(base, nc)
 	if nc.TLS == 1 {
-		base["tls"] = buildTLSConfig(nc, certFile, keyFile)
+		if tls := buildTLSConfig(nc, certFile, keyFile); tls != nil {
+			base["tls"] = tls
+		}
 	}
 	return base
 }
 
-func applyTransport(base M, nc *panel.NodeConfig) {
+func applyTransport(base M, nc *model.NodeSpec) {
 	if nc.Network == "" || nc.Network == "tcp" {
 		return
 	}
@@ -737,7 +796,9 @@ func applyTransport(base M, nc *panel.NodeConfig) {
 				transport["early_data_header_name"] = v
 			}
 		case "grpc":
-			if v, ok := nc.NetworkSettings["service_name"]; ok {
+			if v, ok := nc.NetworkSettings["serviceName"]; ok {
+				transport["service_name"] = v
+			} else if v, ok := nc.NetworkSettings["service_name"]; ok {
 				transport["service_name"] = v
 			} else if v, ok := nc.NetworkSettings["serviceName"]; ok {
 				transport["service_name"] = v
@@ -763,7 +824,15 @@ func applyTransport(base M, nc *panel.NodeConfig) {
 	base["transport"] = transport
 }
 
-func buildTLSConfig(nc *panel.NodeConfig, certFile, keyFile string) M {
+// buildTLSConfig returns sing-box inbound TLS options when certificate and key paths exist.
+// If either path is missing, it returns nil: the inbound should run without a TLS layer
+// (e.g. TLS terminated at nginx/CDN while the panel still shows tls=1).
+// Sing-box does not accept a magic "self-signed" path — it tries to open that name as a file.
+func buildTLSConfig(nc *model.NodeSpec, certFile, keyFile string) M {
+	if certFile == "" || keyFile == "" {
+		return nil
+	}
+
 	tls := M{"enabled": true}
 
 	serverName := nc.ServerName
@@ -791,7 +860,7 @@ func buildTLSConfig(nc *panel.NodeConfig, certFile, keyFile string) M {
 	return tls
 }
 
-func buildRealityConfig(nc *panel.NodeConfig) M {
+func buildRealityConfig(nc *model.NodeSpec) M {
 	tls := M{"enabled": true}
 	if nc.TLSSettings == nil {
 		return tls
@@ -857,7 +926,7 @@ func buildRealityConfig(nc *panel.NodeConfig) M {
 	return tls
 }
 
-func applyMultiplex(base M, nc *panel.NodeConfig) {
+func applyMultiplex(base M, nc *model.NodeSpec) {
 	if nc.Multiplex == nil || !nc.Multiplex.Enabled {
 		return
 	}
@@ -883,4 +952,11 @@ func applyMultiplex(base M, nc *panel.NodeConfig) {
 	}
 
 	base["multiplex"] = mux
+}
+
+func applyProxyProtocol(base M, nc *model.NodeSpec) {
+	// if !nc.GetProxyProtocol() {
+	// 	return
+	// }
+	// base["proxy_protocol"] = true
 }
