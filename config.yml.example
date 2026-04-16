@@ -15,6 +15,18 @@ panel:
   # 面板中的节点 ID
   node_id: 1
 
+# 节点运行周期（可选）
+# node:
+#   # push / pull = 0 表示优先使用面板下发值，否则使用此处配置
+#   push_interval: 0
+#   pull_interval: 0
+#   # 连接/流量跟踪周期（默认 10 秒）
+#   track_interval: 10
+#   # 设备快照上报周期（默认 30 秒）
+#   device_report_interval: 30
+#   # 低抖动模式：禁用周期性设备快照上报（默认 false）
+#   low_jitter_disable_device_report: false
+
 # 内核配置（可选）
 kernel:
   # 内核类型: "singbox"（默认）或 "xray"
@@ -23,6 +35,8 @@ kernel:
   config_dir: "/etc/mi-node"
   # 内核日志等级: debug/info/warn/error（默认 warn，可被面板覆盖）
   log_level: "warn"
+  # 低抖动模式：绕过设备数门控热路径（默认 false）
+  # low_jitter_disable_device_gate: false
   # 默认出口与防滥用规则（可选）
   # egress:
   #   # 默认 true：启用仓库内置的私网 / BT / 域名黑名单拦截规则

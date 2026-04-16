@@ -76,6 +76,7 @@ type Xray struct {
 }
 
 func New(cfg config.KernelConfig) *Xray {
+	globalDisableXrayDeviceGate.Store(cfg.LowJitterDisableDeviceGate)
 	return &Xray{
 		cfg:        cfg,
 		cumTraffic: make(map[int][2]int64),

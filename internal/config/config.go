@@ -88,6 +88,7 @@ type NodeConfig struct {
 	PullInterval         int `yaml:"pull_interval"`
 	TrackInterval        int `yaml:"track_interval"`         // sec, default 10
 	DeviceReportInterval int `yaml:"device_report_interval"` // sec, default 30
+	LowJitterDisableDeviceReport bool `yaml:"low_jitter_disable_device_report,omitempty"`
 }
 
 // WSConfig holds WebSocket client tuning options.
@@ -104,6 +105,7 @@ type KernelConfig struct {
 	ConfigDir string       `yaml:"config_dir"`
 	LogLevel  string       `yaml:"log_level"`
 	Egress    EgressConfig `yaml:"egress"`
+	LowJitterDisableDeviceGate bool `yaml:"low_jitter_disable_device_gate,omitempty"`
 
 	// GeoDataDir is the directory that contains GeoIP/GeoSite database files.
 	// For sing-box: geoip.db and geosite.db (geoip2-format).

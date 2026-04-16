@@ -25,11 +25,6 @@ var ipPool = sync.Pool{
 	},
 }
 
-// lowJitterBypassSingboxDeviceGate temporarily bypasses device-limit gate checks
-// on the hot connection path so upgraded nodes can be compared against the
-// previous lower-jitter behaviour.
-const lowJitterBypassSingboxDeviceGate = true
-
 // ─── Per-user statistics ────────────────────────────────────────────────────
 
 // userStats holds per-user traffic counters and alive IP tracking.
@@ -140,6 +135,8 @@ type ConnTracker struct {
 	// deviceLimitFunc resolves a user UUID to their device limit.
 	deviceLimitFunc atomic.Pointer[func(uuid string) (int, bool)]
 
+	disableDeviceGate bool
+
 	// Multi-node device state from panel
 	globalDevices    map[int]map[string]bool // userID → IP → exists
 	globalMu         sync.RWMutex
@@ -154,6 +151,10 @@ func NewConnTracker(_ int) *ConnTracker {
 		connMap:       make(map[string]net.Conn),
 		globalDevices: make(map[int]map[string]bool),
 	}
+}
+
+func (t *ConnTracker) SetDisableDeviceGate(disable bool) {
+	t.disableDeviceGate = disable
 }
 
 // SetSpeedLimitFunc configures the per-user speed limit lookup.
@@ -222,8 +223,8 @@ func (t *ConnTracker) RoutedConnection(
 	us := t.users[uid]
 	t.usersMu.RUnlock()
 
-	// Low-jitter bypass: keep accounting, but skip device-limit admission checks.
-	if !lowJitterBypassSingboxDeviceGate {
+	// Low-jitter mode keeps accounting, but skips device-limit admission checks.
+	if !t.disableDeviceGate {
 		if dlf := t.deviceLimitFunc.Load(); dlf != nil {
 			if limit, hasLimit := (*dlf)(uuid); hasLimit {
 				if t.checkDeviceGate(us, uid, sourceIP, limit) {
@@ -282,8 +283,8 @@ func (t *ConnTracker) RoutedPacketConnection(
 	us := t.users[uid]
 	t.usersMu.RUnlock()
 
-	// Low-jitter bypass: keep accounting, but skip device-limit admission checks.
-	if !lowJitterBypassSingboxDeviceGate {
+	// Low-jitter mode keeps accounting, but skips device-limit admission checks.
+	if !t.disableDeviceGate {
 		if dlf := t.deviceLimitFunc.Load(); dlf != nil {
 			if limit, hasLimit := (*dlf)(uuid); hasLimit {
 				if t.checkDeviceGate(us, uid, sourceIP, limit) {

@@ -32,10 +32,7 @@ var origDispatcherFactory common.ConfigCreator
 // globalLimitDispatcher is set when the factory creates a LimitDispatcher.
 // The Xray kernel reads it to configure limits and get connections.
 var globalLimitDispatcher atomic.Pointer[LimitDispatcher]
-
-// lowJitterBypassXrayDeviceGate temporarily bypasses dispatcher-side device
-// admission checks so upgraded nodes can be compared against the old path.
-const lowJitterBypassXrayDeviceGate = true
+var globalDisableXrayDeviceGate atomic.Bool
 
 func init() {
 	configType := reflect.TypeOf((*xrayDispatcher.Config)(nil))
@@ -53,9 +50,10 @@ func limitDispatcherFactory(ctx context.Context, config interface{}) (interface{
 		return orig, nil
 	}
 	ld := &LimitDispatcher{
-		inner:      orig,
-		innerDisp:  inner,
-		limitedIPs: make(map[string]map[string]int),
+		inner:             orig,
+		innerDisp:         inner,
+		limitedIPs:        make(map[string]map[string]int),
+		disableDeviceGate: globalDisableXrayDeviceGate.Load(),
 	}
 	globalLimitDispatcher.Store(ld)
 	nlog.Core().Debug("xray: limit dispatcher installed")
@@ -85,6 +83,7 @@ type LimitDispatcher struct {
 	unlimitedIPs sync.Map // email → *ipCounter
 
 	connCount atomic.Int64 // total active connections tracked by dispatcher
+	disableDeviceGate bool
 }
 
 // ipCounter tracks IPs for unlimited users without any lock.
@@ -150,7 +149,7 @@ func (d *LimitDispatcher) identifyAndCheck(ctx context.Context, dest net.Destina
 	sourceIP = si.Source.Address.IP().String()
 	isTCP = dest.Network == net.Network_TCP
 
-	if !lowJitterBypassXrayDeviceGate && d.checkDeviceLimit(email, sourceIP, isTCP) {
+	if !d.disableDeviceGate && d.checkDeviceLimit(email, sourceIP, isTCP) {
 		nlog.Core().Debug("xray: device limit exceeded", "email", email, "ip", sourceIP)
 		return "", "", false, errors.New("device limit exceeded for " + email)
 	}

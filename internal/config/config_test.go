@@ -427,6 +427,35 @@ panel:
 	if cfg.WS.DiscoveryInterval != 300 {
 		t.Fatalf("ws.discovery_interval: got %d, want 300", cfg.WS.DiscoveryInterval)
 	}
+	if cfg.Node.LowJitterDisableDeviceReport {
+		t.Fatal("expected low_jitter_disable_device_report to default to false")
+	}
+	if cfg.Kernel.LowJitterDisableDeviceGate {
+		t.Fatal("expected low_jitter_disable_device_gate to default to false")
+	}
+}
+
+func TestLoad_LowJitterToggles(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+node:
+  low_jitter_disable_device_report: true
+kernel:
+  low_jitter_disable_device_gate: true
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Node.LowJitterDisableDeviceReport {
+		t.Fatal("expected low_jitter_disable_device_report to be true")
+	}
+	if !cfg.Kernel.LowJitterDisableDeviceGate {
+		t.Fatal("expected low_jitter_disable_device_gate to be true")
+	}
 }
 
 func TestLoad_NegativeTickerIntervals(t *testing.T) {

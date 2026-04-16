@@ -146,6 +146,7 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, cert
 
 	// Fresh tracker on full restart.
 	s.connTracker = NewConnTracker(0)
+	s.connTracker.SetDisableDeviceGate(s.cfg.LowJitterDisableDeviceGate)
 	s.connTracker.SetUserMap(buildUserMap(users))
 	if s.speedLimitFunc != nil {
 		s.connTracker.SetSpeedLimitFunc(s.speedLimitFunc)
