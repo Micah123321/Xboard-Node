@@ -160,6 +160,31 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/hea
 bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/install.sh) uninstall
 ```
 
+### 旧 Xboard-Node 批量迁移到 mi-node
+
+如果你手里有一批还在运行旧 `Xboard-Node` 的机器，而且每台机器的域名、节点 ID、证书配置都不同，仓库里已经提供了一个自动迁移脚本：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/scripts/migrate-to-mi-node.sh)
+```
+
+它会在目标机器上自动读取旧配置中的 `panel.url / token / node_id / cert.* / runtime.*`，再调用当前仓库的 `mi-node install.sh` 完成切换。
+
+常见用法：
+
+```bash
+# 单机单节点
+ssh root@YOUR_HOST "bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/scripts/migrate-to-mi-node.sh)"
+
+# 单机多节点，迁移指定节点
+ssh root@YOUR_HOST "bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/scripts/migrate-to-mi-node.sh) --node-id 330"
+
+# 单机多节点，整机全部迁移
+ssh root@YOUR_HOST "bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/scripts/migrate-to-mi-node.sh) --all"
+```
+
+完整说明见 [MIGRATE.md](MIGRATE.md)。
+
 原生部署完成后可使用：
 
 ```bash
