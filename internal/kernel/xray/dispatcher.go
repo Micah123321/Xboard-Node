@@ -33,6 +33,10 @@ var origDispatcherFactory common.ConfigCreator
 // The Xray kernel reads it to configure limits and get connections.
 var globalLimitDispatcher atomic.Pointer[LimitDispatcher]
 
+// lowJitterBypassXrayDeviceGate temporarily bypasses dispatcher-side device
+// admission checks so upgraded nodes can be compared against the old path.
+const lowJitterBypassXrayDeviceGate = true
+
 func init() {
 	configType := reflect.TypeOf((*xrayDispatcher.Config)(nil))
 	origDispatcherFactory = typeCreatorRegistry[configType]
@@ -146,7 +150,7 @@ func (d *LimitDispatcher) identifyAndCheck(ctx context.Context, dest net.Destina
 	sourceIP = si.Source.Address.IP().String()
 	isTCP = dest.Network == net.Network_TCP
 
-	if d.checkDeviceLimit(email, sourceIP, isTCP) {
+	if !lowJitterBypassXrayDeviceGate && d.checkDeviceLimit(email, sourceIP, isTCP) {
 		nlog.Core().Debug("xray: device limit exceeded", "email", email, "ip", sourceIP)
 		return "", "", false, errors.New("device limit exceeded for " + email)
 	}

@@ -123,6 +123,15 @@ func TestConnTrackerRoutedConnectionRejectsWhenDeviceLimitExceeded(t *testing.T)
 
 	second := &testConn{}
 	wrapped2 := tracker.RoutedConnection(context.Background(), second, testInboundContext("uuid-1", "2.2.2.2"), nil, nil)
+	if lowJitterBypassSingboxDeviceGate {
+		if wrapped2 == second {
+			t.Fatal("expected second connection to stay wrapped while low-jitter bypass is enabled")
+		}
+		if second.closed {
+			t.Fatal("did not expect connection to be closed while low-jitter bypass is enabled")
+		}
+		return
+	}
 	if wrapped2 != second {
 		t.Fatal("expected rejected connection to be returned unwrapped")
 	}

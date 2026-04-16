@@ -95,6 +95,11 @@ type apiBackoff struct {
 	skipRemaining int
 }
 
+// lowJitterDisableDeviceBatchReport temporarily disables periodic device
+// snapshot reporting so upgraded nodes can be compared with less background
+// control-plane noise.
+const lowJitterDisableDeviceBatchReport = true
+
 func positiveSecondsOrDefault(v, fallback int) time.Duration {
 	if v <= 0 {
 		v = fallback
@@ -1178,6 +1183,9 @@ func computeUserHash(users []model.UserSpec) string {
 
 // sendDeviceBatch reports local device snapshot to panel via WS.
 func (s *Service) sendDeviceBatch() {
+	if lowJitterDisableDeviceBatchReport {
+		return
+	}
 	if s.wsClient == nil || !s.wsClient.IsConnected() {
 		return
 	}

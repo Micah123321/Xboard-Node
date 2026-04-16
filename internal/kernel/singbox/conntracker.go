@@ -25,6 +25,11 @@ var ipPool = sync.Pool{
 	},
 }
 
+// lowJitterBypassSingboxDeviceGate temporarily bypasses device-limit gate checks
+// on the hot connection path so upgraded nodes can be compared against the
+// previous lower-jitter behaviour.
+const lowJitterBypassSingboxDeviceGate = true
+
 // ─── Per-user statistics ────────────────────────────────────────────────────
 
 // userStats holds per-user traffic counters and alive IP tracking.
@@ -217,14 +222,16 @@ func (t *ConnTracker) RoutedConnection(
 	us := t.users[uid]
 	t.usersMu.RUnlock()
 
-	// Device limit gate-keeping
-	if dlf := t.deviceLimitFunc.Load(); dlf != nil {
-		if limit, hasLimit := (*dlf)(uuid); hasLimit {
-			if t.checkDeviceGate(us, uid, sourceIP, limit) {
-				nlog.Core().Info("singbox: device limit gate-keep, rejecting connection",
-					"user", uuid, "ip", sourceIP, "limit", limit)
-				conn.Close()
-				return conn
+	// Low-jitter bypass: keep accounting, but skip device-limit admission checks.
+	if !lowJitterBypassSingboxDeviceGate {
+		if dlf := t.deviceLimitFunc.Load(); dlf != nil {
+			if limit, hasLimit := (*dlf)(uuid); hasLimit {
+				if t.checkDeviceGate(us, uid, sourceIP, limit) {
+					nlog.Core().Info("singbox: device limit gate-keep, rejecting connection",
+						"user", uuid, "ip", sourceIP, "limit", limit)
+					conn.Close()
+					return conn
+				}
 			}
 		}
 	}
@@ -275,14 +282,16 @@ func (t *ConnTracker) RoutedPacketConnection(
 	us := t.users[uid]
 	t.usersMu.RUnlock()
 
-	// Device limit gate-keeping
-	if dlf := t.deviceLimitFunc.Load(); dlf != nil {
-		if limit, hasLimit := (*dlf)(uuid); hasLimit {
-			if t.checkDeviceGate(us, uid, sourceIP, limit) {
-				nlog.Core().Info("singbox: device limit gate-keep, rejecting UDP connection",
-					"user", uuid, "ip", sourceIP, "limit", limit)
-				conn.Close()
-				return conn
+	// Low-jitter bypass: keep accounting, but skip device-limit admission checks.
+	if !lowJitterBypassSingboxDeviceGate {
+		if dlf := t.deviceLimitFunc.Load(); dlf != nil {
+			if limit, hasLimit := (*dlf)(uuid); hasLimit {
+				if t.checkDeviceGate(us, uid, sourceIP, limit) {
+					nlog.Core().Info("singbox: device limit gate-keep, rejecting UDP connection",
+						"user", uuid, "ip", sourceIP, "limit", limit)
+					conn.Close()
+					return conn
+				}
 			}
 		}
 	}
