@@ -17,7 +17,7 @@ import (
 	"github.com/xtls/xray-core/features/routing"
 	"github.com/xtls/xray-core/transport"
 
-	"github.com/micah123321/mi-node/internal/kernel"
+	"github.com/micah123321/mi-node/internal/nlog"
 )
 
 // Access xray's internal config creator registry so we can replace the

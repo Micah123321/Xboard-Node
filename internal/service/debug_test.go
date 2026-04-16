@@ -8,7 +8,7 @@ import (
 
 	"github.com/micah123321/mi-node/internal/config"
 	"github.com/micah123321/mi-node/internal/kernel"
-	"github.com/micah123321/mi-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/model"
 	"golang.org/x/time/rate"
 )
 
@@ -25,27 +25,37 @@ func (f *fakeDebugKernel) Name() string { return f.name }
 
 func (f *fakeDebugKernel) Protocols() []string { return nil }
 
-func (f *fakeDebugKernel) Start(*panel.NodeConfig, []panel.User, string, string) error { return nil }
+func (f *fakeDebugKernel) Capabilities() kernel.Capabilities { return kernel.Capabilities{} }
+
+func (f *fakeDebugKernel) Start(*model.NodeSpec, []model.UserSpec, string, string) error { return nil }
 
 func (f *fakeDebugKernel) Stop() {}
 
 func (f *fakeDebugKernel) IsRunning() bool { return f.running }
 
-func (f *fakeDebugKernel) Reload(*panel.NodeConfig, []panel.User, string, string) error { return nil }
+func (f *fakeDebugKernel) Reload(*model.NodeSpec, []model.UserSpec, string, string) error { return nil }
 
-func (f *fakeDebugKernel) AddUsers([]panel.User) (int, error) { return 0, nil }
+func (f *fakeDebugKernel) AddUsers([]model.UserSpec) (int, error) { return 0, nil }
 
-func (f *fakeDebugKernel) RemoveUsers([]panel.User) (int, error) { return 0, nil }
+func (f *fakeDebugKernel) RemoveUsers([]model.UserSpec) (int, error) { return 0, nil }
 
-func (f *fakeDebugKernel) UpdateUsers([]panel.User) (int, int, error) { return 0, 0, nil }
+func (f *fakeDebugKernel) UpdateUsers([]model.UserSpec) (int, int, error) { return 0, 0, nil }
 
-func (f *fakeDebugKernel) GetConnections(context.Context) ([]kernel.Connection, error) {
-	return nil, nil
+func (f *fakeDebugKernel) GetUserTraffic(context.Context) (map[int][2]int64, map[int]map[string]bool, int, error) {
+	return nil, nil, 0, nil
 }
 
 func (f *fakeDebugKernel) CloseConnection(context.Context, string) error { return nil }
 
+func (f *fakeDebugKernel) CloseUserConnections(context.Context, string) error { return nil }
+
 func (f *fakeDebugKernel) SetSpeedLimitFunc(func(string) *rate.Limiter) {}
+
+func (f *fakeDebugKernel) SetDeviceLimitFunc(func(string) (int, bool)) {}
+
+func (f *fakeDebugKernel) UpdateGlobalDevices(map[int][]string) {}
+
+func (f *fakeDebugKernel) ClearGlobalDevices() {}
 
 func (f *fakeDebugKernel) CurrentDefaultOutboundTag() string { return f.defaultTag }
 

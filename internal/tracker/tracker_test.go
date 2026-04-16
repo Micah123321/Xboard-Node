@@ -2,8 +2,6 @@ package tracker
 
 import (
 	"testing"
-
-	"github.com/micah123321/mi-node/internal/kernel"
 )
 
 func TestProcess_InitialTraffic(t *testing.T) {

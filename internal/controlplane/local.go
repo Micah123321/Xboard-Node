@@ -3,8 +3,8 @@ package controlplane
 import (
 	"context"
 
-	"github.com/cedar2025/xboard-node/internal/config"
-	"github.com/cedar2025/xboard-node/internal/model"
+	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/model"
 )
 
 type LocalControlPlane struct {

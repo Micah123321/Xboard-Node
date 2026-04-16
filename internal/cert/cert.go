@@ -22,6 +22,7 @@ import (
 	"github.com/libdns/cloudflare"
 
 	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/nlog"
 )
 
 // Manager handles TLS certificate lifecycle.

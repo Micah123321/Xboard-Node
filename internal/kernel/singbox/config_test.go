@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/model"
 	"github.com/micah123321/mi-node/internal/panel"
 )
 
@@ -157,7 +158,7 @@ func TestBuildInbound_VMess_WithGRPCCamelCaseServiceName(t *testing.T) {
 			"serviceName": "camel-grpc",
 		},
 	}
-	inbound := buildInbound(nc, testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
 	transport := inbound["transport"].(M)
 	assertMapValue(t, transport, "type", "grpc")
 	assertMapValue(t, transport, "service_name", "camel-grpc")
@@ -285,7 +286,7 @@ func TestBuildInbound_Trojan_NoTLS(t *testing.T) {
 		ServerPort: 80,
 		TLS:        0,
 	}
-	inbound := buildInbound(nc, testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
 	tls, exists := inbound["tls"].(M)
 	if !exists {
 		t.Fatal("trojan with tls=0 should still get TLS")
@@ -526,7 +527,7 @@ func TestBuildConfig_WithSOCKS5Proxy(t *testing.T) {
 		ServerPort: 111,
 		Cipher:     "aes-128-gcm",
 	}
-	cfg := buildConfig(kcfg, nc, testUsers, "", "")
+	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, "", "")
 
 	outbounds := cfg["outbounds"].([]M)
 	foundProxy := false
@@ -560,7 +561,7 @@ func TestBuildConfig_WithShadowsocksProxy(t *testing.T) {
 		ServerPort: 111,
 		Cipher:     "aes-128-gcm",
 	}
-	cfg := buildConfig(kcfg, nc, testUsers, "", "")
+	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, "", "")
 
 	outbounds := cfg["outbounds"].([]M)
 	foundProxy := false
@@ -596,7 +597,7 @@ func TestBuildConfig_WithShadowsocks2022Proxy(t *testing.T) {
 		ServerPort: 111,
 		Cipher:     "aes-128-gcm",
 	}
-	cfg := buildConfig(kcfg, nc, testUsers, "", "")
+	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, "", "")
 
 	outbounds := cfg["outbounds"].([]M)
 	for _, outbound := range outbounds {
@@ -624,7 +625,7 @@ func TestBuildConfig_TUICWithShadowsocksProxy(t *testing.T) {
 		ServerName:        "node.example.com",
 		CongestionControl: "bbr",
 	}
-	cfg := buildConfig(kcfg, nc, testUsers[:1], "/path/cert.pem", "/path/key.pem")
+	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers[:1], "/path/cert.pem", "/path/key.pem")
 
 	inbounds := cfg["inbounds"].([]M)
 	if len(inbounds) != 1 {
@@ -784,7 +785,7 @@ func TestBuildRoutes_WithCustomRules(t *testing.T) {
 		{ID: 2, Match: []string{"10.0.0.0/8"}, Action: "block"},
 		{ID: 3, Match: []string{"allowed.com"}, Action: "direct"},
 	}
-	route := buildRoutes(config.KernelConfig{}, rules, nil)
+	route := buildRoutes(config.KernelConfig{}, testRouteRules(rules), nil)
 	allRules := route["rules"].([]M)
 
 	if len(allRules) != 6 {
@@ -809,7 +810,7 @@ func TestBuildRoutes_MultiMatch(t *testing.T) {
 		{ID: 1, Match: []string{"*.evil.com", "bad.org", "192.168.1.0/24"}, Action: "block"},
 		{ID: 2, Match: []string{"*.bypass.com"}, Action: "direct"},
 	}
-	route := buildRoutes(config.KernelConfig{}, rules, nil)
+	route := buildRoutes(config.KernelConfig{}, testRouteRules(rules), nil)
 	allRules := route["rules"].([]M)
 
 	// 3 default protection rules + 1 domain rule + 1 CIDR rule + 1 direct rule = 6
@@ -852,13 +853,9 @@ func TestBuildTLSConfig_WithCert(t *testing.T) {
 
 func TestBuildTLSConfig_NoCert(t *testing.T) {
 	nc := &panel.NodeConfig{ServerName: "example.com"}
-	tls := buildTLSConfig(nc, "", "")
-	assertMapValue(t, tls, "enabled", true)
-	if _, exists := tls["certificate_path"]; exists {
-		t.Fatal("certificate_path should be omitted when no certificate files are available")
-	}
-	if _, exists := tls["key_path"]; exists {
-		t.Fatal("key_path should be omitted when no certificate files are available")
+	tls := buildTLSConfig(testNodeSpec(nc), "", "")
+	if tls != nil {
+		t.Fatal("expected nil TLS config when no certificate files are available")
 	}
 }
 

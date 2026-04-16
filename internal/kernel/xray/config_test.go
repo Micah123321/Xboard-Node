@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/model"
 	"github.com/micah123321/mi-node/internal/panel"
 )
 
@@ -92,7 +93,7 @@ func TestBuildConfig_WithSOCKS5Proxy(t *testing.T) {
 		Cipher:     "aes-128-gcm",
 	}
 
-	cfg := buildConfig(kcfg, nc, testUsers, "", "")
+	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, "", "")
 	outbounds := cfg["outbounds"].([]M)
 	foundProxy := false
 	for _, outbound := range outbounds {
@@ -131,7 +132,7 @@ func TestBuildConfig_WithShadowsocksProxy(t *testing.T) {
 		Cipher:     "aes-128-gcm",
 	}
 
-	cfg := buildConfig(kcfg, nc, testUsers, "", "")
+	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, "", "")
 	outbounds := cfg["outbounds"].([]M)
 	foundProxy := false
 	for _, outbound := range outbounds {
@@ -181,7 +182,7 @@ func TestBuildConfig_WithShadowsocks2022Proxy(t *testing.T) {
 		Cipher:     "aes-128-gcm",
 	}
 
-	cfg := buildConfig(kcfg, nc, testUsers, "", "")
+	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, "", "")
 	outbounds := cfg["outbounds"].([]M)
 	for _, outbound := range outbounds {
 		if outbound["tag"] == config.DefaultShadowsocksProxyTag {
@@ -205,7 +206,7 @@ func TestBuildConfig_Shadowsocks_MultiUserTraditional(t *testing.T) {
 		ServerPort: 8388,
 		Cipher:     "aes-128-gcm",
 	}
-	cfg := buildConfig(testKernelCfg, &nc, testUsers, "", "")
+	cfg := buildConfig(testKernelCfg, testNodeSpec(&nc), testUsers, "", "")
 	data, _ := json.Marshal(cfg)
 
 	var parsed map[string]interface{}
@@ -238,7 +239,7 @@ func TestBuildInbound_Trojan_NoTLSForceEnableTLS(t *testing.T) {
 		Network:    "grpc",
 		TLS:        0,
 	}
-	inbound := buildInbound(&nc, testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(&nc), testUsers, "", "")
 	streamSettings := inbound["streamSettings"].(M)
 	if streamSettings["security"] != "tls" {
 		t.Fatalf("expected trojan fallback security tls, got %v", streamSettings["security"])
@@ -255,7 +256,7 @@ func TestBuildInbound_Trojan_WithGRPCCamelCaseServiceName(t *testing.T) {
 			"serviceName": "trojan-grpc",
 		},
 	}
-	inbound := buildInbound(&nc, testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(&nc), testUsers, "", "")
 	streamSettings := inbound["streamSettings"].(M)
 	grpcSettings := streamSettings["grpcSettings"].(M)
 	if grpcSettings["serviceName"] != "trojan-grpc" {
@@ -502,7 +503,7 @@ func TestBuildRouting_WithRules(t *testing.T) {
 		},
 	}
 
-	routing := buildRouting(config.KernelConfig{}, rules, nil)
+	routing := buildRouting(config.KernelConfig{}, testRouteRules(rules), nil)
 	xrayRules := routing["rules"].([]M)
 
 	// 3 default protection rules + 2 panel rules + 1 panel IP rule + 1 catch-all rule = 7

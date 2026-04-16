@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/micah123321/mi-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/model"
 )
 
 // ValidateShadowsocks2022Credentials checks server and user credentials before
 // they are passed into kernel-specific config builders. SS2022 requires
 // standard base64 keys with a cipher-specific decoded length.
-func ValidateShadowsocks2022Credentials(nc *panel.NodeConfig, users []panel.User) error {
+func ValidateShadowsocks2022Credentials(nc *model.NodeSpec, users []model.UserSpec) error {
 	if nc == nil || nc.Protocol != "shadowsocks" || !strings.HasPrefix(nc.Cipher, "2022-blake3-") {
 		return nil
 	}

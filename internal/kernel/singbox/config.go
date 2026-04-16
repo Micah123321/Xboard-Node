@@ -10,7 +10,8 @@ import (
 
 	"github.com/micah123321/mi-node/internal/config"
 	"github.com/micah123321/mi-node/internal/kernel"
-	"github.com/micah123321/mi-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/model"
+	"github.com/micah123321/mi-node/internal/nlog"
 	"github.com/go-viper/mapstructure/v2"
 )
 
@@ -221,7 +222,7 @@ func buildDefaultProtectionRules() []M {
 	}
 }
 
-func buildRoutes(kcfg config.KernelConfig, panelRoutes []panel.RouteRule, custom []map[string]any) M {
+func buildRoutes(kcfg config.KernelConfig, panelRoutes []model.RouteRule, custom []map[string]any) M {
 	var rules []M
 
 	if kcfg.Egress.DefaultRulesEnabled() {
@@ -603,7 +604,15 @@ func buildTrojan(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, k
 	// Trojan requires TLS or Reality. If the panel omitted the flag, still
 	// generate a default TLS block so the inbound remains startable.
 	if _, ok := base["tls"]; !ok {
-		base["tls"] = buildTLSConfig(nc, certFile, keyFile)
+		tls := M{"enabled": true}
+		serverName := nc.ServerName
+		if serverName == "" && nc.Host != "" {
+			serverName = nc.Host
+		}
+		if serverName != "" {
+			tls["server_name"] = serverName
+		}
+		base["tls"] = tls
 	}
 	return base
 }

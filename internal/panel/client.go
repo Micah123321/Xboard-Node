@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/nlog"
 	"github.com/go-viper/mapstructure/v2"
 )
 

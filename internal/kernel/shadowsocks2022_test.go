@@ -4,16 +4,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/micah123321/mi-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/model"
 )
 
 func TestValidateShadowsocks2022Credentials_ValidAES128(t *testing.T) {
-	nc := &panel.NodeConfig{
+	nc := &model.NodeSpec{
 		Protocol:  "shadowsocks",
 		Cipher:    "2022-blake3-aes-128-gcm",
 		ServerKey: "MDEyMzQ1Njc4OWFiY2RlZg==",
 	}
-	users := []panel.User{
+	users := []model.UserSpec{
 		{ID: 1, UUID: "MDEyMzQ1Njc4OWFiY2RlZg=="},
 		{ID: 2, UUID: "ZmVkY2JhOTg3NjU0MzIxMA=="},
 	}
@@ -24,12 +24,12 @@ func TestValidateShadowsocks2022Credentials_ValidAES128(t *testing.T) {
 }
 
 func TestValidateShadowsocks2022Credentials_InvalidServerKey(t *testing.T) {
-	nc := &panel.NodeConfig{
+	nc := &model.NodeSpec{
 		Protocol:  "shadowsocks",
 		Cipher:    "2022-blake3-aes-128-gcm",
 		ServerKey: "not-base64",
 	}
-	users := []panel.User{{ID: 1, UUID: "MDEyMzQ1Njc4OWFiY2RlZg=="}}
+	users := []model.UserSpec{{ID: 1, UUID: "MDEyMzQ1Njc4OWFiY2RlZg=="}}
 
 	err := ValidateShadowsocks2022Credentials(nc, users)
 	if err == nil {
@@ -44,12 +44,12 @@ func TestValidateShadowsocks2022Credentials_InvalidServerKey(t *testing.T) {
 }
 
 func TestValidateShadowsocks2022Credentials_InvalidUserPassword(t *testing.T) {
-	nc := &panel.NodeConfig{
+	nc := &model.NodeSpec{
 		Protocol:  "shadowsocks",
 		Cipher:    "2022-blake3-aes-128-gcm",
 		ServerKey: "MDEyMzQ1Njc4OWFiY2RlZg==",
 	}
-	users := []panel.User{{ID: 42, UUID: "875-jk6wtj"}}
+	users := []model.UserSpec{{ID: 42, UUID: "875-jk6wtj"}}
 
 	err := ValidateShadowsocks2022Credentials(nc, users)
 	if err == nil {
@@ -64,12 +64,12 @@ func TestValidateShadowsocks2022Credentials_InvalidUserPassword(t *testing.T) {
 }
 
 func TestValidateShadowsocks2022Credentials_InvalidLength(t *testing.T) {
-	nc := &panel.NodeConfig{
+	nc := &model.NodeSpec{
 		Protocol:  "shadowsocks",
 		Cipher:    "2022-blake3-aes-256-gcm",
 		ServerKey: "MDEyMzQ1Njc4OWFiY2RlZg==",
 	}
-	users := []panel.User{{ID: 1, UUID: "MDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXY="}}
+	users := []model.UserSpec{{ID: 1, UUID: "MDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXY="}}
 
 	err := ValidateShadowsocks2022Credentials(nc, users)
 	if err == nil {

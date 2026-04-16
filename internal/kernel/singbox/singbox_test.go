@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cedar2025/xboard-node/internal/config"
+	"github.com/micah123321/mi-node/internal/config"
 	"github.com/sagernet/sing-box/adapter"
 	singM "github.com/sagernet/sing/common/metadata"
 	"golang.org/x/time/rate"

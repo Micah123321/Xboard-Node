@@ -7,11 +7,23 @@ import (
 
 	"github.com/micah123321/mi-node/internal/config"
 	"github.com/micah123321/mi-node/internal/kernel"
-	"github.com/micah123321/mi-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/model"
+	"github.com/micah123321/mi-node/internal/nlog"
 )
 
 // M is a shorthand for building JSON-like maps
 type M = map[string]interface{}
+
+type ss2022Config struct {
+	method string
+	size   int
+}
+
+var ss2022Methods = map[string]ss2022Config{
+	"2022-blake3-aes-128-gcm":       {"2022-blake3-aes-128-gcm", 16},
+	"2022-blake3-aes-256-gcm":       {"2022-blake3-aes-256-gcm", 32},
+	"2022-blake3-chacha20-poly1305": {"2022-blake3-chacha20-poly1305", 32},
+}
 
 func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
 	var outbounds []M
@@ -390,7 +402,9 @@ func buildTrojan(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, k
 	return base
 }
 
-func buildShadowsocks(base M, nc *panel.NodeConfig, users []panel.User) M {
+func buildShadowsocks(base M, nc *model.NodeSpec, users []model.UserSpec) M {
+	ss2022, isSS2022 := ss2022Methods[nc.Cipher]
+
 	if !strings.HasPrefix(nc.Cipher, "2022-blake3-") {
 		clients := make([]M, 0, len(users))
 		for _, u := range users {
@@ -709,7 +723,7 @@ func buildRealitySettings(nc *model.NodeSpec) M {
 	return reality
 }
 
-func buildRouting(kcfg config.KernelConfig, rules []panel.RouteRule, customRules []map[string]any) M {
+func buildRouting(kcfg config.KernelConfig, rules []model.RouteRule, customRules []map[string]any) M {
 	var xrayRules []M
 
 	if kcfg.Egress.DefaultRulesEnabled() {

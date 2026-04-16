@@ -4,8 +4,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/micah123321/mi-node/internal/kernel"
-	"github.com/micah123321/mi-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/model"
 )
 
 func TestNew(t *testing.T) {

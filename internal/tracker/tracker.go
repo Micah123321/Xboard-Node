@@ -7,7 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/micah123321/mi-node/internal/kernel"
+	"github.com/micah123321/mi-node/internal/nlog"
 )
 
 // snapshot is an immutable point-in-time view of tracker state.

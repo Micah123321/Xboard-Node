@@ -32,7 +32,8 @@ import (
 	"github.com/micah123321/mi-node/internal/config"
 	"github.com/micah123321/mi-node/internal/kernel"
 	"github.com/micah123321/mi-node/internal/kernel/geodata"
-	"github.com/micah123321/mi-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/model"
+	"github.com/micah123321/mi-node/internal/nlog"
 )
 
 const (
@@ -114,7 +115,7 @@ func (x *Xray) Protocols() []string {
 //	Phase 3 – Swap:    stop old instance          (brief kernel lock)
 //	Phase 4 – Start:   instance.Start             (no lock, potentially slow)
 //	Phase 5 – Commit:  store new state            (brief kernel lock)
-func (x *Xray) Start(nodeConfig *panel.NodeConfig, users []panel.User, certFile, keyFile string) error {
+func (x *Xray) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) error {
 	if err := kernel.ValidateShadowsocks2022Credentials(nodeConfig, users); err != nil {
 		return err
 	}

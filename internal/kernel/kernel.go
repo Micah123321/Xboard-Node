@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/micah123321/mi-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/model"
 	"golang.org/x/time/rate"
 )
 

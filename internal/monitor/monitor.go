@@ -4,7 +4,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/cedar2025/xboard-node/internal/nlog"
+	"github.com/micah123321/mi-node/internal/nlog"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/load"

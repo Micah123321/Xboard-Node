@@ -1,6 +1,6 @@
 package model
 
-import "github.com/cedar2025/xboard-node/internal/config"
+import "github.com/micah123321/mi-node/internal/config"
 
 func NodeSpecFromStandalone(cfg *config.Config) *NodeSpec {
 	sc := cfg.Standalone

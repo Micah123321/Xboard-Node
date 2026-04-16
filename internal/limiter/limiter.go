@@ -4,8 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/micah123321/mi-node/internal/kernel"
-	"github.com/micah123321/mi-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/model"
 )
 
 // Limiter enforces per-user device limits and detects removed users.

@@ -8,7 +8,7 @@ import (
 
 	"github.com/micah123321/mi-node/internal/cert"
 	"github.com/micah123321/mi-node/internal/config"
-	"github.com/micah123321/mi-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/model"
 )
 
 func TestEnsureTLSCertificateAutoSelfSigned(t *testing.T) {
@@ -24,7 +24,7 @@ func TestEnsureTLSCertificateAutoSelfSigned(t *testing.T) {
 		cfg:  cfg,
 		cert: cert.NewManager(cfg.Cert),
 	}
-	nc := &panel.NodeConfig{
+	nc := &model.NodeSpec{
 		Protocol:   "tuic",
 		ServerName: "node.example.com",
 	}
@@ -57,7 +57,7 @@ func TestEnsureTLSCertificateSkipsPlainProtocols(t *testing.T) {
 		cfg:  cfg,
 		cert: cert.NewManager(cfg.Cert),
 	}
-	nc := &panel.NodeConfig{
+	nc := &model.NodeSpec{
 		Protocol: "shadowsocks",
 	}
 
@@ -73,7 +73,7 @@ func TestEnsureTLSCertificateSkipsPlainProtocols(t *testing.T) {
 }
 
 func TestInferCertificateDomain(t *testing.T) {
-	nc := &panel.NodeConfig{
+	nc := &model.NodeSpec{
 		Host: "edge.example.com:443",
 		TLSSettings: map[string]interface{}{
 			"server_name": "tls.example.com",

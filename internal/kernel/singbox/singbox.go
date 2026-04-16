@@ -19,7 +19,8 @@ import (
 
 	"github.com/micah123321/mi-node/internal/config"
 	"github.com/micah123321/mi-node/internal/kernel"
-	"github.com/micah123321/mi-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/model"
+	"github.com/micah123321/mi-node/internal/nlog"
 )
 
 // drainTimeout is how long stop() waits for in-flight connections to finish
@@ -88,7 +89,7 @@ func (s *SingBox) Protocols() []string {
 	}
 }
 
-func (s *SingBox) Start(nodeConfig *panel.NodeConfig, users []panel.User, certFile, keyFile string) error {
+func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) error {
 	if err := kernel.ValidateShadowsocks2022Credentials(nodeConfig, users); err != nil {
 		return err
 	}
@@ -196,7 +197,7 @@ func recycleOldBox(oldBox *box.Box, oldCancel context.CancelFunc, oldCtx context
 // Reload hot-swaps the inbound users and routing rules without restarting the box.
 // Routes, outbounds, and the connTracker stay alive so in-flight connections
 // continue to be tracked correctly.
-func (s *SingBox) Reload(nodeConfig *panel.NodeConfig, users []panel.User, certFile, keyFile string) error {
+func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) error {
 	if err := kernel.ValidateShadowsocks2022Credentials(nodeConfig, users); err != nil {
 		return err
 	}
@@ -529,7 +530,7 @@ func (s *SingBox) UpdateUsers(users []model.UserSpec) (added, removed int, err e
 
 // reloadInboundsLocked hot-swaps inbound users using UpdatableInbound.
 // Must be called with s.mu held.
-func (s *SingBox) reloadInboundsLocked(users []panel.User) error {
+func (s *SingBox) reloadInboundsLocked(users []model.UserSpec) error {
 	if err := kernel.ValidateShadowsocks2022Credentials(s.nodeConfig, users); err != nil {
 		return err
 	}

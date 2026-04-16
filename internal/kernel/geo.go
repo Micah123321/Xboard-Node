@@ -3,7 +3,7 @@ package kernel
 import (
 	"strings"
 
-	"github.com/micah123321/mi-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/model"
 )
 
 // NeedsGeoIP returns true when any panel route rule contains a "geoip:" match entry.

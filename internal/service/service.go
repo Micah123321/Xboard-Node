@@ -7,22 +7,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net"
 	"os"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/micah123321/mi-node/internal/cert"
 	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/controlplane"
 	"github.com/micah123321/mi-node/internal/kernel"
 	"github.com/micah123321/mi-node/internal/kernel/singbox"
 	"github.com/micah123321/mi-node/internal/kernel/xray"
 	"github.com/micah123321/mi-node/internal/limiter"
+	"github.com/micah123321/mi-node/internal/model"
 	"github.com/micah123321/mi-node/internal/monitor"
-	"github.com/micah123321/mi-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/nlog"
 	"github.com/micah123321/mi-node/internal/tracker"
 )
 
@@ -71,6 +75,18 @@ type Service struct {
 
 	egressProbeMu   sync.RWMutex
 	lastEgressProbe EgressDialCheckResult
+
+	// metricsMu: lastUsers, lastConfig, wsClient, wsDisconnectAt (buildMetrics vs main loop).
+	metricsMu sync.RWMutex
+}
+
+// pullResult carries the outcome of an async pullViaAPI back to the main goroutine.
+type pullResult struct {
+	config      *model.NodeSpec
+	users       []model.UserSpec
+	configHash  string
+	userHash    string
+	certChanged bool
 }
 
 // apiBackoff implements simple exponential backoff for API failures.
@@ -272,23 +288,10 @@ func (s *Service) initialSetup(ctx context.Context) error {
 		return nil
 	}
 
-	// Update service-level config overrides from remote NodeConfig if present
-	s.applyRemoteOverrides(ctx, nodeConfig)
-
-	if err := s.ensureTLSCertificate(ctx, nodeConfig); err != nil {
-		return fmt.Errorf("ensure tls certificate: %w", err)
+	s.applyRemoteOverrides(ctx, bootstrap.Config)
+	if !s.startKernel(bootstrap.Config, bootstrap.Users) {
+		return fmt.Errorf("start kernel")
 	}
-
-	if err := s.kernel.Start(nodeConfig, users, s.cert.CertFile(), s.cert.KeyFile()); err != nil {
-		return fmt.Errorf("start kernel: %w", err)
-	}
-
-	// record applied state on success
-	s.appliedState.Config = nodeConfig
-	s.appliedState.Users = users
-	s.logShadowsocksEgressStatus("start")
-	s.triggerShadowsocksEgressProbe("start")
-
 	return nil
 }
 
@@ -350,7 +353,7 @@ func (s *Service) applyNodeCert(ctx context.Context, newCfg *config.CertConfig) 
 
 // ensureTLSCertificate makes sure TLS-only inbounds have usable certificate
 // files before the kernel starts or reloads.
-func (s *Service) ensureTLSCertificate(ctx context.Context, nc *panel.NodeConfig) error {
+func (s *Service) ensureTLSCertificate(ctx context.Context, nc *model.NodeSpec) error {
 	if !nodeNeedsTLSCertificate(nc) {
 		return nil
 	}
@@ -389,7 +392,7 @@ func (s *Service) ensureTLSCertificate(ctx context.Context, nc *panel.NodeConfig
 
 // nodeNeedsTLSCertificate reports whether the node protocol requires a server
 // certificate/key pair rather than plaintext or Reality-only settings.
-func nodeNeedsTLSCertificate(nc *panel.NodeConfig) bool {
+func nodeNeedsTLSCertificate(nc *model.NodeSpec) bool {
 	if nc == nil {
 		return false
 	}
@@ -406,7 +409,7 @@ func nodeNeedsTLSCertificate(nc *panel.NodeConfig) bool {
 
 // inferCertificateDomain picks the best host or IP from panel metadata for
 // self-signed certificate SAN/CommonName generation.
-func inferCertificateDomain(nc *panel.NodeConfig) string {
+func inferCertificateDomain(nc *model.NodeSpec) string {
 	if nc == nil {
 		return "localhost"
 	}
@@ -765,7 +768,7 @@ func (s *Service) restoreUserState(users []model.UserSpec, hash string) {
 
 // startKernel starts (or restarts) the kernel with the given config/users and
 // records the successfully applied state. Returns false on error.
-func (s *Service) startKernel(nc *panel.NodeConfig, users []panel.User) bool {
+func (s *Service) startKernel(nc *model.NodeSpec, users []model.UserSpec) bool {
 	if err := s.ensureTLSCertificate(context.Background(), nc); err != nil {
 		slog.Error("failed to prepare TLS certificate", "error", err)
 		return false

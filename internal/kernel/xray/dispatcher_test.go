@@ -4,7 +4,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/micah123321/mi-node/internal/panel"
+	"github.com/xtls/xray-core/common/buf"
+	"github.com/xtls/xray-core/transport"
+
+	"github.com/micah123321/mi-node/internal/model"
 )
 
 func newTestDispatcher() *LimitDispatcher {
