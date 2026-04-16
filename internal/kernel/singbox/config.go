@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/cedar2025/xboard-node/internal/config"
-	"github.com/cedar2025/xboard-node/internal/kernel"
-	"github.com/cedar2025/xboard-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/kernel"
+	"github.com/micah123321/mi-node/internal/panel"
 	"github.com/go-viper/mapstructure/v2"
 )
 

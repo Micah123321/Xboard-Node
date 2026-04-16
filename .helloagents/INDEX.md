@@ -1,7 +1,7 @@
-# Xboard-Node Knowledge Base
+# mi-node Knowledge Base
 
 - kb_version: 1
-- project: Xboard-Node
+- project: mi-node
 - language: zh-CN
 - status: active
 

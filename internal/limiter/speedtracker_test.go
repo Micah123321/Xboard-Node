@@ -3,7 +3,7 @@ package limiter
 import (
 	"testing"
 
-	"github.com/cedar2025/xboard-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/panel"
 )
 
 func TestSpeedTracker_UpdateBuckets(t *testing.T) {

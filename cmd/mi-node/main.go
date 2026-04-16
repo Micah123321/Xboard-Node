@@ -16,8 +16,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cedar2025/xboard-node/internal/config"
-	"github.com/cedar2025/xboard-node/internal/service"
+	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/service"
 )
 
 var (
@@ -93,7 +93,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("xboard-node %s (built %s)\n", version, buildTime)
+		fmt.Printf("mi-node %s (built %s)\n", version, buildTime)
 		os.Exit(0)
 	}
 
@@ -188,7 +188,7 @@ func runWithReload(initialCfg *config.Config, configPath string) {
 		}
 
 		nodes := cfg.ExpandNodes()
-		slog.Info("xboard-node starting",
+		slog.Info("mi-node starting",
 			"version", version,
 			"build_time", buildTime,
 			"nodes", len(nodes),
@@ -276,7 +276,7 @@ func runWithReload(initialCfg *config.Config, configPath string) {
 			if err := firstError(errCh); err != nil {
 				os.Exit(1)
 			}
-			slog.Info("xboard-node stopped")
+			slog.Info("mi-node stopped")
 			return
 		}
 

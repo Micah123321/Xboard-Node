@@ -29,10 +29,10 @@ import (
 
 	_ "github.com/xtls/xray-core/main/distro/all"
 
-	"github.com/cedar2025/xboard-node/internal/config"
-	"github.com/cedar2025/xboard-node/internal/kernel"
-	"github.com/cedar2025/xboard-node/internal/kernel/geodata"
-	"github.com/cedar2025/xboard-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/kernel"
+	"github.com/micah123321/mi-node/internal/kernel/geodata"
+	"github.com/micah123321/mi-node/internal/panel"
 )
 
 const (

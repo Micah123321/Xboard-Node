@@ -75,7 +75,7 @@ panel:
 	if cfg.Kernel.Type != "singbox" {
 		t.Errorf("default kernel.type: got %q, want singbox", cfg.Kernel.Type)
 	}
-	if cfg.Kernel.ConfigDir != "/etc/xboard-node" {
+	if cfg.Kernel.ConfigDir != "/etc/mi-node" {
 		t.Errorf("default config_dir: got %q", cfg.Kernel.ConfigDir)
 	}
 	if cfg.Kernel.LogLevel != "warn" {
@@ -93,7 +93,7 @@ panel:
 	if cfg.DebugPort != 0 {
 		t.Errorf("default debug_port: got %d, want 0", cfg.DebugPort)
 	}
-	expectedCertDir := filepath.Join("/etc/xboard-node", "certs")
+	expectedCertDir := filepath.Join("/etc/mi-node", "certs")
 	if cfg.Cert.CertDir != expectedCertDir {
 		t.Errorf("default cert_dir: got %q, want %q", cfg.Cert.CertDir, expectedCertDir)
 	}

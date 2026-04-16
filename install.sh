@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# xboard-node 多节点部署脚本
+# mi-node 多节点部署脚本
 # 支持: Ubuntu 20+, Debian 11+, CentOS 8+, Alpine 3.18+
 #
 # 本机一键部署（默认，不带 --docker）:
@@ -33,15 +33,15 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 INSTALL_DIR="/usr/local/bin"
-CONFIG_DIR="/etc/xboard-node"
-SERVICE_TEMPLATE="xboard-node@.service"
+CONFIG_DIR="/etc/mi-node"
+SERVICE_TEMPLATE="mi-node@.service"
 DOCKER_COMPOSE_FILE="${CONFIG_DIR}/docker-compose.yml"
 RELEASE_REPO_DEFAULT="Micah123321/Xboard-Node"
-RELEASE_REPO="${XBOARD_RELEASE_REPO:-$RELEASE_REPO_DEFAULT}"
+RELEASE_REPO="${MI_NODE_RELEASE_REPO:-$RELEASE_REPO_DEFAULT}"
 RELEASE_REPO_LC="$(printf '%s' "$RELEASE_REPO" | tr '[:upper:]' '[:lower:]')"
 REPO_URL="https://github.com/${RELEASE_REPO}"
 RELEASES_BASE_URL="${REPO_URL}/releases"
-DOCKER_IMAGE="ghcr.io/${RELEASE_REPO_LC}:latest"
+DOCKER_IMAGE="${MI_NODE_DOCKER_IMAGE:-ghcr.io/micah123321/mi-node:latest}"
 CERT_WAIT_SECONDS=15
 EGRESS_PROBE_WAIT_SECONDS=15
 
@@ -164,12 +164,12 @@ capture_launch_time() {
 
 native_node_service_name() {
     local node_id="$1"
-    printf 'xboard-node@%s' "$node_id"
+    printf 'mi-node@%s' "$node_id"
 }
 
 docker_node_container_name() {
     local node_id="$1"
-    printf 'xboard-node-%s' "$node_id"
+    printf 'mi-node-%s' "$node_id"
 }
 
 can_auto_wait_for_shadowsocks_probe() {
@@ -394,15 +394,15 @@ print_cert_status_hint() {
     echo "    结果:      暂未检测到证书文件"
     if [ "$DOCKER_MODE" -eq 1 ]; then
         echo "    说明:      容器启动后会自动申请，首次签发可能需要几十秒"
-        echo "    排查日志:  docker logs -f xboard-node-${node_id}"
+        echo "    排查日志:  docker logs -f mi-node-${node_id}"
     else
-        if command -v systemctl >/dev/null 2>&1 && systemctl is-active "xboard-node@${node_id}" >/dev/null 2>&1; then
+        if command -v systemctl >/dev/null 2>&1 && systemctl is-active "mi-node@${node_id}" >/dev/null 2>&1; then
             echo "    说明:      服务已启动，可能仍在申请或同步证书"
         else
             echo "    说明:      服务未正常进入 active，证书申请大概率失败"
-            echo "    服务状态:  systemctl status xboard-node@${node_id}"
+            echo "    服务状态:  systemctl status mi-node@${node_id}"
         fi
-        echo "    排查日志:  journalctl -u xboard-node@${node_id} -n 50 --no-pager"
+        echo "    排查日志:  journalctl -u mi-node@${node_id} -n 50 --no-pager"
     fi
     if is_http_cert_mode; then
         print_http01_listener_hint
@@ -838,31 +838,31 @@ download_release_asset() {
 # ─── 二进制安装 ──────────────────────────────────────────────────────
 
 is_binary_installed() {
-    [ -x "${INSTALL_DIR}/xboard-node" ]
+    [ -x "${INSTALL_DIR}/mi-node" ]
 }
 
 install_binary() {
     if is_binary_installed; then
-        log_info "xboard-node 二进制已存在，跳过下载"
+        log_info "mi-node 二进制已存在，跳过下载"
         return
     fi
 
-    log_step "安装 xboard-node 二进制..."
+    log_step "安装 mi-node 二进制..."
 
     local src=""
 
-    if [ -f "./xboard-node" ]; then
-        src="./xboard-node"
-    elif [ -f "./xboard-node-linux-${ARCH}" ]; then
-        src="./xboard-node-linux-${ARCH}"
+    if [ -f "./mi-node" ]; then
+        src="./mi-node"
+    elif [ -f "./mi-node-linux-${ARCH}" ]; then
+        src="./mi-node-linux-${ARCH}"
     fi
 
     if [ -n "$src" ]; then
-        cp "$src" "${INSTALL_DIR}/xboard-node"
+        cp "$src" "${INSTALL_DIR}/mi-node"
         log_info "已从本地文件安装: $src"
     else
         log_info "正在从当前仓库 Releases 下载: ${REPO_URL}"
-        if download_release_asset "xboard-node-linux-${ARCH}" "${INSTALL_DIR}/xboard-node"; then
+        if download_release_asset "mi-node-linux-${ARCH}" "${INSTALL_DIR}/mi-node"; then
             log_info "下载完成"
         else
             log_error "下载失败。请先将对应架构的二进制放到当前目录后重试。"
@@ -870,8 +870,8 @@ install_binary() {
         fi
     fi
 
-    chmod +x "${INSTALL_DIR}/xboard-node"
-    log_info "xboard-node 已安装到 ${INSTALL_DIR}/xboard-node"
+    chmod +x "${INSTALL_DIR}/mi-node"
+    log_info "mi-node 已安装到 ${INSTALL_DIR}/mi-node"
 }
 
 # ─── systemd 模板 ───────────────────────────────────────────────────
@@ -889,13 +889,13 @@ install_systemd_template() {
 
     cat > "/etc/systemd/system/${SERVICE_TEMPLATE}" << 'UNIT'
 [Unit]
-Description=Xboard Node Backend (node %i)
+Description=Mi Node Backend (node %i)
 Documentation=${REPO_URL}
 After=network.target nss-lookup.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/xboard-node -c /etc/xboard-node/%i/config.yml
+ExecStart=/usr/local/bin/mi-node -c /etc/mi-node/%i/config.yml
 Restart=always
 RestartSec=5
 LimitNOFILE=1048576
@@ -927,14 +927,14 @@ migrate_legacy_config() {
             mv "${CONFIG_DIR}/config.yml" "${CONFIG_DIR}/${legacy_id}/config.yml"
 
             if command -v systemctl >/dev/null 2>&1; then
-                systemctl stop xboard-node 2>/dev/null || true
-                systemctl disable xboard-node 2>/dev/null || true
-                rm -f /etc/systemd/system/xboard-node.service
+                systemctl stop mi-node 2>/dev/null || true
+                systemctl disable mi-node 2>/dev/null || true
+                rm -f /etc/systemd/system/mi-node.service
 
                 install_systemd_template
-                systemctl enable "xboard-node@${legacy_id}" 2>/dev/null || true
-                systemctl start "xboard-node@${legacy_id}" 2>/dev/null || true
-                log_info "服务已迁移: xboard-node → xboard-node@${legacy_id}"
+                systemctl enable "mi-node@${legacy_id}" 2>/dev/null || true
+                systemctl start "mi-node@${legacy_id}" 2>/dev/null || true
+                log_info "服务已迁移: mi-node → mi-node@${legacy_id}"
             fi
         fi
     fi
@@ -1129,13 +1129,13 @@ add_node_native() {
     if command -v systemctl >/dev/null 2>&1; then
         install_systemd_template
         capture_launch_time
-        systemctl enable "xboard-node@${node_id}"
-        systemctl start "xboard-node@${node_id}"
+        systemctl enable "mi-node@${node_id}"
+        systemctl start "mi-node@${node_id}"
         NODE_LAUNCHED=1
-        log_info "服务已启动: xboard-node@${node_id}"
+        log_info "服务已启动: mi-node@${node_id}"
     else
         log_warn "未检测到 systemd，请手动运行:"
-        echo "  xboard-node -c ${CONFIG_DIR}/${node_id}/config.yml"
+        echo "  mi-node -c ${CONFIG_DIR}/${node_id}/config.yml"
     fi
 }
 
@@ -1166,7 +1166,7 @@ add_node_docker() {
         capture_launch_time
         ${COMPOSE_CMD} up -d "node-${node_id}"
         NODE_LAUNCHED=1
-        log_info "容器已启动: xboard-node-${node_id}"
+        log_info "容器已启动: mi-node-${node_id}"
     else
         log_warn "未检测到 Docker，请先安装后再执行:"
         echo "  cd ${CONFIG_DIR} && docker compose up -d"
@@ -1198,12 +1198,12 @@ HEADER
         cat >> "${DOCKER_COMPOSE_FILE}" << EOF
   node-${nid}:
     image: ${DOCKER_IMAGE}
-    container_name: xboard-node-${nid}
+    container_name: mi-node-${nid}
     restart: always
     network_mode: host
     volumes:
-      - ./${nid}/config.yml:/etc/xboard-node/config.yml:ro
-      - ./${nid}:/etc/xboard-node/data
+      - ./${nid}/config.yml:/etc/mi-node/config.yml:ro
+      - ./${nid}:/etc/mi-node/data
     logging:
       driver: json-file
       options:
@@ -1270,15 +1270,15 @@ deploy_node() {
 
     if [ "$DOCKER_MODE" -eq 1 ]; then
         echo "  管理命令:"
-        echo "    日志:    docker logs -f xboard-node-${NODE_ID}"
+        echo "    日志:    docker logs -f mi-node-${NODE_ID}"
         echo "    停止:    cd ${CONFIG_DIR} && docker compose stop node-${NODE_ID}"
         echo "    重启:    cd ${CONFIG_DIR} && docker compose restart node-${NODE_ID}"
     else
         echo "  管理命令:"
-        echo "    状态:    systemctl status xboard-node@${NODE_ID}"
-        echo "    日志:    journalctl -u xboard-node@${NODE_ID} -f"
-        echo "    停止:    systemctl stop xboard-node@${NODE_ID}"
-        echo "    重启:    systemctl restart xboard-node@${NODE_ID}"
+        echo "    状态:    systemctl status mi-node@${NODE_ID}"
+        echo "    日志:    journalctl -u mi-node@${NODE_ID} -f"
+        echo "    停止:    systemctl stop mi-node@${NODE_ID}"
+        echo "    重启:    systemctl restart mi-node@${NODE_ID}"
     fi
 
     if [ -n "$GOMEMLIMIT" ] || [ -n "$GOGC" ]; then
@@ -1366,13 +1366,13 @@ remove_node() {
     log_step "正在删除节点 ${node_id}..."
 
     if command -v systemctl >/dev/null 2>&1; then
-        systemctl stop "xboard-node@${node_id}" 2>/dev/null || true
-        systemctl disable "xboard-node@${node_id}" 2>/dev/null || true
+        systemctl stop "mi-node@${node_id}" 2>/dev/null || true
+        systemctl disable "mi-node@${node_id}" 2>/dev/null || true
         log_info "systemd 服务已停止并禁用"
     fi
 
     if command -v docker >/dev/null 2>&1; then
-        docker rm -f "xboard-node-${node_id}" 2>/dev/null || true
+        docker rm -f "mi-node-${node_id}" 2>/dev/null || true
     fi
 
     rm -rf "${CONFIG_DIR}/${node_id}"
@@ -1403,12 +1403,12 @@ list_nodes() {
 
         local status="${RED}stopped${NC}"
         if command -v systemctl >/dev/null 2>&1; then
-            if systemctl is-active "xboard-node@${nid}" >/dev/null 2>&1; then
+            if systemctl is-active "mi-node@${nid}" >/dev/null 2>&1; then
                 status="${GREEN}running (systemd)${NC}"
             fi
         fi
         if command -v docker >/dev/null 2>&1; then
-            if docker inspect -f '{{.State.Running}}' "xboard-node-${nid}" 2>/dev/null | grep -q true; then
+            if docker inspect -f '{{.State.Running}}' "mi-node-${nid}" 2>/dev/null | grep -q true; then
                 status="${GREEN}running (docker)${NC}"
             fi
         fi
@@ -1432,16 +1432,16 @@ list_nodes() {
 # ─── 更新 / 卸载 ─────────────────────────────────────────────────────
 
 update_binary() {
-    log_step "更新 xboard-node 二进制..."
+    log_step "更新 mi-node 二进制..."
 
     detect_arch
 
-    local tmp="/tmp/xboard-node-update"
+    local tmp="/tmp/mi-node-update"
 
     log_info "正在从当前仓库 Releases 更新: ${REPO_URL}"
-    if download_release_asset "xboard-node-linux-${ARCH}" "$tmp"; then
+    if download_release_asset "mi-node-linux-${ARCH}" "$tmp"; then
         chmod +x "$tmp"
-        mv "$tmp" "${INSTALL_DIR}/xboard-node"
+        mv "$tmp" "${INSTALL_DIR}/mi-node"
         log_info "二进制更新完成"
     else
         log_error "更新下载失败"
@@ -1454,9 +1454,9 @@ update_binary() {
             [ -f "${dir}config.yml" ] || continue
             local nid
             nid=$(basename "$dir")
-            if systemctl is-active "xboard-node@${nid}" >/dev/null 2>&1; then
-                systemctl restart "xboard-node@${nid}"
-                log_info "已重启: xboard-node@${nid}"
+            if systemctl is-active "mi-node@${nid}" >/dev/null 2>&1; then
+                systemctl restart "mi-node@${nid}"
+                log_info "已重启: mi-node@${nid}"
             fi
         done
     fi
@@ -1468,19 +1468,19 @@ update_binary() {
 }
 
 do_uninstall() {
-    log_step "卸载 xboard-node..."
+    log_step "卸载 mi-node..."
 
     if command -v systemctl >/dev/null 2>&1; then
         for dir in "${CONFIG_DIR}"/*/; do
             [ -f "${dir}config.yml" ] || continue
             local nid
             nid=$(basename "$dir")
-            systemctl stop "xboard-node@${nid}" 2>/dev/null || true
-            systemctl disable "xboard-node@${nid}" 2>/dev/null || true
+            systemctl stop "mi-node@${nid}" 2>/dev/null || true
+            systemctl disable "mi-node@${nid}" 2>/dev/null || true
         done
-        systemctl stop xboard-node 2>/dev/null || true
-        systemctl disable xboard-node 2>/dev/null || true
-        rm -f /etc/systemd/system/xboard-node.service
+        systemctl stop mi-node 2>/dev/null || true
+        systemctl disable mi-node 2>/dev/null || true
+        rm -f /etc/systemd/system/mi-node.service
         rm -f "/etc/systemd/system/${SERVICE_TEMPLATE}"
         systemctl daemon-reload
     fi
@@ -1490,11 +1490,11 @@ do_uninstall() {
             [ -f "${dir}config.yml" ] || continue
             local nid
             nid=$(basename "$dir")
-            docker rm -f "xboard-node-${nid}" 2>/dev/null || true
+            docker rm -f "mi-node-${nid}" 2>/dev/null || true
         done
     fi
 
-    rm -f "${INSTALL_DIR}/xboard-node"
+    rm -f "${INSTALL_DIR}/mi-node"
     log_info "二进制已删除"
 
     echo ""
@@ -1506,7 +1506,7 @@ do_uninstall() {
         log_info "配置保留在 ${CONFIG_DIR}/"
     fi
 
-    log_info "xboard-node 已卸载"
+    log_info "mi-node 已卸载"
 }
 
 # ─── 帮助信息 ────────────────────────────────────────────────────────
@@ -1514,7 +1514,7 @@ do_uninstall() {
 print_help() {
     cat << 'HELP'
 
-  xboard-node 部署脚本
+  mi-node 部署脚本
 
   本机部署（默认，推荐，适合减少 Docker 内存占用）:
 
@@ -1584,7 +1584,7 @@ print_help() {
       -e apiHost=https://panel.example.com \
       -e apiKey=YOUR_TOKEN \
       -e nodeID=1 \
-      ghcr.io/micah123321/xboard-node:latest
+      ghcr.io/micah123321/mi-node:latest
 
 HELP
 }

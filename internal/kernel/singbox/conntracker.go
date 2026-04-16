@@ -15,7 +15,7 @@ import (
 	N "github.com/sagernet/sing/common/network"
 	"golang.org/x/time/rate"
 
-	"github.com/cedar2025/xboard-node/internal/kernel"
+	"github.com/micah123321/mi-node/internal/kernel"
 )
 
 // connRecord holds the minimal per-connection state we need.

@@ -7,9 +7,9 @@ import (
 	"net"
 	"testing"
 
-	"github.com/cedar2025/xboard-node/internal/cert"
-	"github.com/cedar2025/xboard-node/internal/config"
-	"github.com/cedar2025/xboard-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/cert"
+	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/panel"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing/service"
 )

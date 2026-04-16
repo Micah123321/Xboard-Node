@@ -18,9 +18,9 @@ import (
 	"github.com/sagernet/sing/service"
 	"golang.org/x/time/rate"
 
-	"github.com/cedar2025/xboard-node/internal/config"
-	"github.com/cedar2025/xboard-node/internal/kernel"
-	"github.com/cedar2025/xboard-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/kernel"
+	"github.com/micah123321/mi-node/internal/panel"
 )
 
 // drainTimeout is how long stop() waits for in-flight connections to finish

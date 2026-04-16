@@ -16,15 +16,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cedar2025/xboard-node/internal/cert"
-	"github.com/cedar2025/xboard-node/internal/config"
-	"github.com/cedar2025/xboard-node/internal/kernel"
-	"github.com/cedar2025/xboard-node/internal/kernel/singbox"
-	"github.com/cedar2025/xboard-node/internal/kernel/xray"
-	"github.com/cedar2025/xboard-node/internal/limiter"
-	"github.com/cedar2025/xboard-node/internal/monitor"
-	"github.com/cedar2025/xboard-node/internal/panel"
-	"github.com/cedar2025/xboard-node/internal/tracker"
+	"github.com/micah123321/mi-node/internal/cert"
+	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/kernel"
+	"github.com/micah123321/mi-node/internal/kernel/singbox"
+	"github.com/micah123321/mi-node/internal/kernel/xray"
+	"github.com/micah123321/mi-node/internal/limiter"
+	"github.com/micah123321/mi-node/internal/monitor"
+	"github.com/micah123321/mi-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/tracker"
 )
 
 type Service struct {

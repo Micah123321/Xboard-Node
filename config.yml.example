@@ -1,4 +1,4 @@
-# Xboard Node 配置示例
+# Mi Node 配置示例
 # 复制为 config.yml 后按需修改
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -8,7 +8,7 @@
 
 # 面板连接配置
 panel:
-  # Xboard 面板地址（必填）
+  # Mi 面板地址（必填）
   url: "https://panel.example.com"
   # 节点通信令牌（必填，需与面板设置一致）
   token: "your-server-token"
@@ -19,8 +19,8 @@ panel:
 kernel:
   # 内核类型: "singbox"（默认）或 "xray"
   type: "singbox"
-  # 生成配置与运行时文件的目录（默认: /etc/xboard-node）
-  config_dir: "/etc/xboard-node"
+  # 生成配置与运行时文件的目录（默认: /etc/mi-node）
+  config_dir: "/etc/mi-node"
   # 内核日志等级: debug/info/warn/error（默认 warn，可被面板覆盖）
   log_level: "warn"
   # 默认出口与防滥用规则（可选）
@@ -74,7 +74,7 @@ cert:
   # key_file: "/etc/ssl/private/key.pem"
 
   # 自动证书存储目录（默认: {config_dir}/certs）
-  # cert_dir: "/etc/xboard-node/certs"
+  # cert_dir: "/etc/mi-node/certs"
 
 # 日志配置
 log:
@@ -106,12 +106,12 @@ runtime:
 #     # 每个节点都可以单独覆盖部分配置
 #     node_type: "shadowsocks"
 #     kernel:
-#       config_dir: "/etc/xboard-node/node-2"
+#       config_dir: "/etc/mi-node/node-2"
 #       log_level: "info"
 #
 #   - node_id: 3
 #     kernel:
-#       config_dir: "/etc/xboard-node/node-3"
+#       config_dir: "/etc/mi-node/node-3"
 #     cert:
 #       domain: "node3.example.com"
 #       auto_tls: true

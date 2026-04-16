@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cedar2025/xboard-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/panel"
 )
 
 func TestValidateShadowsocks2022Credentials_ValidAES128(t *testing.T) {

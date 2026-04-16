@@ -4,8 +4,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/cedar2025/xboard-node/internal/kernel"
-	"github.com/cedar2025/xboard-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/kernel"
+	"github.com/micah123321/mi-node/internal/panel"
 )
 
 func TestNew(t *testing.T) {

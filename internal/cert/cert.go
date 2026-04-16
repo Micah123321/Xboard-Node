@@ -22,7 +22,7 @@ import (
 	"github.com/libdns/alidns"
 	"github.com/libdns/cloudflare"
 
-	"github.com/cedar2025/xboard-node/internal/config"
+	"github.com/micah123321/mi-node/internal/config"
 )
 
 // Manager handles TLS certificate lifecycle.
@@ -70,7 +70,7 @@ func (m *Manager) setCertPaths() {
 	case "http", "dns", "self", "content":
 		dir := m.cfg.CertDir
 		if dir == "" {
-			dir = "/etc/xboard-node/certs"
+			dir = "/etc/mi-node/certs"
 		}
 		domain := m.cfg.Domain
 		if domain == "" {

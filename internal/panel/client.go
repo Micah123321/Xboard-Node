@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cedar2025/xboard-node/internal/config"
+	"github.com/micah123321/mi-node/internal/config"
 	"github.com/go-viper/mapstructure/v2"
 )
 
@@ -25,7 +25,7 @@ var (
 	onlineMapPool  = sync.Pool{New: func() interface{} { return make(map[string]int) }}
 )
 
-// Client communicates with the Xboard panel API
+// Client communicates with the Mi panel API
 type Client struct {
 	baseURL    string
 	token      string

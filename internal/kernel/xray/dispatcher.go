@@ -20,7 +20,7 @@ import (
 	"github.com/xtls/xray-core/transport"
 	"golang.org/x/time/rate"
 
-	"github.com/cedar2025/xboard-node/internal/kernel"
+	"github.com/micah123321/mi-node/internal/kernel"
 )
 
 // Access xray's internal config creator registry so we can replace the

@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/cedar2025/xboard-node/internal/service"
+	"github.com/micah123321/mi-node/internal/service"
 )
 
 func TestNewDebugMux_ReturnsStatuses(t *testing.T) {

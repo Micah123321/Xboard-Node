@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cedar2025/xboard-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/panel"
 )
 
 // ValidateShadowsocks2022Credentials checks server and user credentials before

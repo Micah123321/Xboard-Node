@@ -1,6 +1,6 @@
-# xboard-node
+# mi-node
 
-Xboard 的专用节点后端，完整兼容 Xboard API，支持 sing-box 与 Xray 两套内核。
+Mi Node 的专用节点后端，完整兼容 Mi API，支持 sing-box 与 Xray 两套内核。
 
 > **免责声明**: 本项目仅供学习与研究使用，请自行评估实际部署风险。
 
@@ -93,7 +93,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs
   --cert-dns-env CF_API_TOKEN=YOUR_TOKEN
 ```
 
-- 部署完成后，安装脚本会先等待最多约 15 秒再输出“证书申请状态”：检测到 `/etc/xboard-node/<node_id>/certs/<domain>.crt/.key` 即表示申请成功；否则会提示你查看服务日志继续排查。
+- 部署完成后，安装脚本会先等待最多约 15 秒再输出“证书申请状态”：检测到 `/etc/mi-node/<node_id>/certs/<domain>.crt/.key` 即表示申请成功；否则会提示你查看服务日志继续排查。
 - 当前内置支持 `cloudflare` 和 `alidns`
 - DNS-01 适合被 CDN 代理、无法开放 `80` 端口，或需要通配符证书的场景
 
@@ -163,9 +163,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/Xboard-Node/refs
 原生部署完成后可使用：
 
 ```bash
-systemctl status xboard-node@1
-journalctl -u xboard-node@1 -f
-systemctl restart xboard-node@1
+systemctl status mi-node@1
+journalctl -u mi-node@1 -f
+systemctl restart mi-node@1
 ```
 
 ## 本地 SS 出站调试端口
@@ -198,7 +198,7 @@ docker run -d --restart=always --network=host \
   -e apiHost=https://panel.example.com \
   -e apiKey=YOUR_TOKEN \
   -e nodeID=1 \
-  ghcr.io/micah123321/xboard-node:latest
+  ghcr.io/micah123321/mi-node:latest
 ```
 
 ## 源码构建
@@ -234,7 +234,7 @@ panel:
 
 kernel:
   type: "singbox"
-  config_dir: "/etc/xboard-node"
+  config_dir: "/etc/mi-node"
   log_level: "warn"
 
 log:

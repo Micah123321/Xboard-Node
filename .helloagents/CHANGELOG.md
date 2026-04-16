@@ -4,6 +4,10 @@
 
 ### 快速修复
 
+- **[rename/build/install/docs]**: 仓内项目命名已从 `xboard-node` 全量切换到 `mi-node`；Go module path 现为 `github.com/micah123321/mi-node`，入口目录改为 `cmd/mi-node`，编译产物、Docker 镜像、安装目录、systemd 服务名、容器名与 CI artifact 全部同步为 `mi-node`。当前 GitHub 发布源仓库仍保留 `Micah123321/Xboard-Node`，待远端仓名变更后再同步切换安装源。 — by yinjianm
+  - 方案: [202604161651_mi-full-rename](archive/2026-04/202604161651_mi-full-rename/)
+  - 决策: mi-full-rename#D001(仓内标识全量硬切为 mi-node)
+
 - **[install/docs]**: `install.sh` 现在会明确区分 ACME HTTP-01 的公网 `80` 校验与 `--cert-http-port` 的本地监听语义；当使用自定义本地监听端口时，部署结果与证书排障输出会明确提示“公网 80 仍需转发到该端口”。 — by yinjianm
   - 方案: [202604152142_install-http01-preflight](archive/2026-04/202604152142_install-http01-preflight/)
   - 决策: install-http01-preflight#D001(不伪造任意公网端口 HTTP-01，改为增强预检与提示)

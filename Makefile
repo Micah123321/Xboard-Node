@@ -6,15 +6,15 @@ LDFLAGS := -s -w -X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME) -X m
 
 # Build for current platform
 build:
-	go build -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_clash_api" -o xboard-node ./cmd/xboard-node
+	go build -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_clash_api" -o mi-node ./cmd/mi-node
 
 # Build for Linux amd64
 build-linux:
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_acme with_clash_api" -o xboard-node-linux-amd64 ./cmd/xboard-node
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_acme with_clash_api" -o mi-node-linux-amd64 ./cmd/mi-node
 
 # Build for Linux arm64
 build-linux-arm64:
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_acme with_clash_api" -o xboard-node-linux-arm64 ./cmd/xboard-node
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -tags "with_quic with_utls with_wireguard with_acme with_clash_api" -o mi-node-linux-arm64 ./cmd/mi-node
 
 # Build all platforms
 build-all: build-linux build-linux-arm64
@@ -25,17 +25,17 @@ test:
 
 # Clean build artifacts
 clean:
-	rm -f xboard-node xboard-node-linux-*
+	rm -f mi-node mi-node-linux-*
 
 # Build Docker image
 docker:
-	docker build -t xboard-node:$(VERSION) -t xboard-node:latest .
+	docker build -t mi-node:$(VERSION) -t mi-node:latest .
 
 # Install to system (single node, legacy compat)
 install: build
-	sudo cp xboard-node /usr/local/bin/
-	sudo mkdir -p /etc/xboard-node
-	@if [ ! -f /etc/xboard-node/config.yml ]; then \
-		sudo cp config.yml.example /etc/xboard-node/config.yml; \
-		echo "Config copied to /etc/xboard-node/config.yml - please edit it"; \
+	sudo cp mi-node /usr/local/bin/
+	sudo mkdir -p /etc/mi-node
+	@if [ ! -f /etc/mi-node/config.yml ]; then \
+		sudo cp config.yml.example /etc/mi-node/config.yml; \
+		echo "Config copied to /etc/mi-node/config.yml - please edit it"; \
 	fi

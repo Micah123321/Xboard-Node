@@ -1,4 +1,4 @@
-module github.com/cedar2025/xboard-node
+module github.com/micah123321/mi-node
 
 go 1.25.7
 

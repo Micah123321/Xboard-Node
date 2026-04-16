@@ -3,7 +3,7 @@ package tracker
 import (
 	"testing"
 
-	"github.com/cedar2025/xboard-node/internal/kernel"
+	"github.com/micah123321/mi-node/internal/kernel"
 )
 
 func TestProcess_InitialTraffic(t *testing.T) {
