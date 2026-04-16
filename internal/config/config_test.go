@@ -694,6 +694,29 @@ kernel:
 	}
 }
 
+func TestLoad_EgressShadowsocks_2022Chacha20Accepted(t *testing.T) {
+	path := writeTemp(t, `
+panel:
+  url: "https://example.com"
+  token: "tok"
+  node_id: 1
+kernel:
+  egress:
+    shadowsocks:
+      uri: "`+ssURI("2022-blake3-chacha20-poly1305", "MDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXY=", "127.0.0.1", 8388)+`"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Kernel.Egress.Shadowsocks.Method != "2022-blake3-chacha20-poly1305" {
+		t.Fatalf("method: got %q", cfg.Kernel.Egress.Shadowsocks.Method)
+	}
+	if !cfg.Kernel.Egress.ShadowsocksEnabled() {
+		t.Fatal("expected Shadowsocks proxy to be enabled")
+	}
+}
+
 func TestLoad_Egress_Conflict(t *testing.T) {
 	path := writeTemp(t, `
 panel:

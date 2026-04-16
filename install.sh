@@ -459,7 +459,7 @@ is_supported_shadowsocks_method() {
     local kernel="$2"
 
     case "$method" in
-        aes-128-gcm|aes-256-gcm|chacha20-ietf-poly1305|2022-blake3-aes-128-gcm|2022-blake3-aes-256-gcm)
+        aes-128-gcm|aes-256-gcm|chacha20-ietf-poly1305|2022-blake3-aes-128-gcm|2022-blake3-aes-256-gcm|2022-blake3-chacha20-poly1305)
             return 0
             ;;
         aes-192-gcm)
@@ -474,9 +474,9 @@ is_supported_shadowsocks_method() {
 
 print_supported_shadowsocks_methods() {
     if [ "$KERNEL_TYPE" = "xray" ]; then
-        echo "aes-128-gcm, aes-256-gcm, chacha20-ietf-poly1305, 2022-blake3-aes-128-gcm, 2022-blake3-aes-256-gcm"
+        echo "aes-128-gcm, aes-256-gcm, chacha20-ietf-poly1305, 2022-blake3-aes-128-gcm, 2022-blake3-aes-256-gcm, 2022-blake3-chacha20-poly1305"
     else
-        echo "aes-128-gcm, aes-192-gcm, aes-256-gcm, chacha20-ietf-poly1305, 2022-blake3-aes-128-gcm, 2022-blake3-aes-256-gcm"
+        echo "aes-128-gcm, aes-192-gcm, aes-256-gcm, chacha20-ietf-poly1305, 2022-blake3-aes-128-gcm, 2022-blake3-aes-256-gcm, 2022-blake3-chacha20-poly1305"
     fi
 }
 
