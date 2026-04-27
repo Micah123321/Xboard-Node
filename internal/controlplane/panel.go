@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/gfwcheck"
 	"github.com/micah123321/mi-node/internal/model"
 	"github.com/micah123321/mi-node/internal/nlog"
 	"github.com/micah123321/mi-node/internal/panel"
@@ -100,6 +101,24 @@ func (p *PanelControlPlane) Report(payload ReportPayload) error {
 	return p.client.Report(payload.Traffic, payload.Alive, payload.Online, payload.CPU, payload.Mem, payload.Swap, payload.Disk, payload.Metrics)
 }
 
+func (p *PanelControlPlane) GFWTask(ctx context.Context) (*gfwcheck.Task, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	return p.client.GetGFWTask()
+}
+
+func (p *PanelControlPlane) ReportGFWCheck(ctx context.Context, report gfwcheck.Report) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	return p.client.ReportGFWCheck(report)
+}
+
 func (p *PanelControlPlane) ReportDevices(push PushClient, devices map[int][]string) {
 	if push != nil {
 		push.SendDeviceReport(devices)
@@ -143,7 +162,12 @@ func (p *PanelControlPlane) newPushClient(metricsFn func() map[string]interface{
 }
 
 func translateWSEvent(event panel.WSEvent) Event {
-	translated := Event{Type: EventType(event.Type), DeltaAction: event.DeltaAction, DeviceUsers: event.DeviceUsers}
+	translated := Event{
+		Type:        EventType(event.Type),
+		DeltaAction: event.DeltaAction,
+		DeviceUsers: event.DeviceUsers,
+		GFWCheck:    event.GFWCheck,
+	}
 	if event.Config != nil {
 		translated.Config = model.NodeSpecFromPanel(event.Config)
 	}
@@ -157,5 +181,7 @@ func translateWSEvent(event panel.WSEvent) Event {
 }
 
 func (p *panelPushClient) Run(ctx context.Context) { p.inner.Run(ctx) }
-func (p *panelPushClient) IsConnected() bool { return p.inner.IsConnected() }
-func (p *panelPushClient) SendDeviceReport(devices map[int][]string) { p.inner.SendDeviceReport(devices) }
+func (p *panelPushClient) IsConnected() bool       { return p.inner.IsConnected() }
+func (p *panelPushClient) SendDeviceReport(devices map[int][]string) {
+	p.inner.SendDeviceReport(devices)
+}

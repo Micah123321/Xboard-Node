@@ -84,10 +84,11 @@ type PanelConfig struct {
 }
 
 type NodeConfig struct {
-	PushInterval         int `yaml:"push_interval"`
-	PullInterval         int `yaml:"pull_interval"`
-	TrackInterval        int `yaml:"track_interval"`         // sec, default 10
-	DeviceReportInterval int `yaml:"device_report_interval"` // sec, default 30
+	PushInterval                 int  `yaml:"push_interval"`
+	PullInterval                 int  `yaml:"pull_interval"`
+	TrackInterval                int  `yaml:"track_interval"`         // sec, default 10
+	DeviceReportInterval         int  `yaml:"device_report_interval"` // sec, default 30
+	GFWCheckInterval             int  `yaml:"gfw_check_interval"`     // sec, default 60
 	LowJitterDisableDeviceReport bool `yaml:"low_jitter_disable_device_report,omitempty"`
 }
 
@@ -101,11 +102,11 @@ type WSConfig struct {
 }
 
 type KernelConfig struct {
-	Type      string       `yaml:"type"` // "singbox" or "xray"
-	ConfigDir string       `yaml:"config_dir"`
-	LogLevel  string       `yaml:"log_level"`
-	Egress    EgressConfig `yaml:"egress"`
-	LowJitterDisableDeviceGate bool `yaml:"low_jitter_disable_device_gate,omitempty"`
+	Type                       string       `yaml:"type"` // "singbox" or "xray"
+	ConfigDir                  string       `yaml:"config_dir"`
+	LogLevel                   string       `yaml:"log_level"`
+	Egress                     EgressConfig `yaml:"egress"`
+	LowJitterDisableDeviceGate bool         `yaml:"low_jitter_disable_device_gate,omitempty"`
 
 	// GeoDataDir is the directory that contains GeoIP/GeoSite database files.
 	// For sing-box: geoip.db and geosite.db (geoip2-format).
@@ -267,6 +268,9 @@ func (c *Config) setDefaults() {
 	if c.Node.DeviceReportInterval == 0 {
 		c.Node.DeviceReportInterval = 30
 	}
+	if c.Node.GFWCheckInterval == 0 {
+		c.Node.GFWCheckInterval = 60
+	}
 	if c.WS.StatusInterval == 0 {
 		c.WS.StatusInterval = 10
 	}
@@ -329,6 +333,9 @@ func (c *Config) validate() error {
 	}
 	if c.Node.DeviceReportInterval < 0 {
 		return fmt.Errorf("node.device_report_interval must not be negative")
+	}
+	if c.Node.GFWCheckInterval < 0 {
+		return fmt.Errorf("node.gfw_check_interval must not be negative")
 	}
 	if c.WS.StatusInterval < 0 {
 		return fmt.Errorf("ws.status_interval must not be negative")

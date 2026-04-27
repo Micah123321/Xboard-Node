@@ -10,8 +10,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/micah123321/mi-node/internal/nlog"
 	"github.com/gorilla/websocket"
+	"github.com/micah123321/mi-node/internal/gfwcheck"
+	"github.com/micah123321/mi-node/internal/nlog"
 )
 
 // WSEvent types
@@ -21,6 +22,7 @@ const (
 	WSEventSyncUserDelta = "sync.user.delta"
 	WSEventSyncDevices   = "sync.devices"   // panel → node: global device state
 	WSEventReportDevices = "report.devices" // node → panel: report device snapshot
+	WSEventGFWCheck      = "gfw.check"      // panel → node: run GFW reachability check
 )
 
 // WSEvent is a parsed data event delivered to the service layer.
@@ -33,6 +35,7 @@ type WSEvent struct {
 
 	// Device sync fields
 	DeviceUsers map[int][]string // userID -> IPs (for sync.devices)
+	GFWCheck    *gfwcheck.Task
 }
 
 // WSStatusChange notifies the service when WS connectivity changes.
@@ -339,6 +342,9 @@ func (w *WSClient) handleMessage(msg wsMessage) {
 	case WSEventSyncDevices:
 		w.handleDataEvent(msg)
 
+	case WSEventGFWCheck:
+		w.handleDataEvent(msg)
+
 	default:
 		nlog.Core().Debug("ws unknown event", "event", msg.Event)
 	}
@@ -410,6 +416,19 @@ func (w *WSClient) handleDataEvent(msg wsMessage) {
 			return
 		}
 		event.DeviceUsers = p.Users
+
+	case WSEventGFWCheck:
+		nlog.Core().Debug("ws gfw check event received")
+		var p gfwcheck.Task
+		if err := decodeData(msg.Data, &p); err != nil {
+			nlog.Core().Warn("ws: cannot decode gfw check payload", "error", err)
+			return
+		}
+		if p.CheckID <= 0 {
+			nlog.Core().Warn("ws: gfw check payload missing check_id")
+			return
+		}
+		event.GFWCheck = &p
 	}
 
 	w.onEvent(event)

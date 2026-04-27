@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 
+	"github.com/micah123321/mi-node/internal/gfwcheck"
 	"github.com/micah123321/mi-node/internal/model"
 )
 
@@ -13,6 +14,7 @@ const (
 	EventSyncUsers     EventType = "sync.users"
 	EventSyncUserDelta EventType = "sync.user.delta"
 	EventSyncDevices   EventType = "sync.devices"
+	EventGFWCheck      EventType = "gfw.check"
 )
 
 type Event struct {
@@ -22,6 +24,7 @@ type Event struct {
 	DeltaAction string
 	DeltaUsers  []model.UserSpec
 	DeviceUsers map[int][]string
+	GFWCheck    *gfwcheck.Task
 }
 
 type StatusChange struct {
@@ -67,6 +70,7 @@ type Source interface {
 	Initial(ctx context.Context, metricsFn func() map[string]interface{}, events chan<- Event, statuses chan<- StatusChange) (Bootstrap, error)
 	Poll(ctx context.Context) (Snapshot, error)
 	Discover(ctx context.Context, metricsFn func() map[string]interface{}, events chan<- Event, statuses chan<- StatusChange) (PushClient, error)
+	GFWTask(ctx context.Context) (*gfwcheck.Task, error)
 	Metrics() APIMetrics
 	SupportsPolling() bool
 	SupportsDiscovery() bool
@@ -75,6 +79,7 @@ type Source interface {
 type Sink interface {
 	Report(payload ReportPayload) error
 	ReportDevices(push PushClient, devices map[int][]string)
+	ReportGFWCheck(ctx context.Context, report gfwcheck.Report) error
 	SupportsReporting() bool
 	SupportsDeviceReports() bool
 }

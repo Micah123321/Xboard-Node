@@ -14,9 +14,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/micah123321/mi-node/internal/config"
-	"github.com/micah123321/mi-node/internal/nlog"
 	"github.com/go-viper/mapstructure/v2"
+	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/gfwcheck"
+	"github.com/micah123321/mi-node/internal/nlog"
 )
 
 var (
@@ -272,6 +273,42 @@ func (c *Client) PushStatus(cpu float64, mem, swap, disk [2]uint64) error {
 		"disk": map[string]interface{}{"total": disk[0], "used": disk[1]},
 	}
 	return c.postJSON("/api/v1/server/UniProxy/status", payload)
+}
+
+func (c *Client) GetGFWTask() (*gfwcheck.Task, error) {
+	resp, err := c.doRequest("GET", "/api/v2/server/gfw/task", nil, "")
+	if err != nil {
+		return nil, fmt.Errorf("get gfw task: %w", err)
+	}
+	defer drainAndClose(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, body)
+	}
+
+	var result struct {
+		Data *gfwcheck.Task `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode gfw task: %w", err)
+	}
+	if result.Data == nil || result.Data.CheckID <= 0 {
+		return nil, nil
+	}
+	return result.Data, nil
+}
+
+func (c *Client) ReportGFWCheck(report gfwcheck.Report) error {
+	data, err := json.Marshal(report)
+	if err != nil {
+		return fmt.Errorf("marshal gfw report: %w", err)
+	}
+	payload := map[string]interface{}{}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return fmt.Errorf("decode gfw report payload: %w", err)
+	}
+	return c.postJSON("/api/v2/server/gfw/report", payload)
 }
 
 // ResetETags clears cached ETags, forcing full responses

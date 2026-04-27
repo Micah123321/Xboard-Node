@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 go build -ldflags "-s -w \
 # Runtime stage — sing-box & xray-core are embedded as Go libraries
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata iputils
 
 COPY --from=builder /build/mi-node /usr/local/bin/mi-node
 

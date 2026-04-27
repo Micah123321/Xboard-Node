@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/gfwcheck"
 	"github.com/micah123321/mi-node/internal/model"
 )
 
@@ -52,5 +53,17 @@ func (l *LocalControlPlane) Discover(ctx context.Context, _ func() map[string]in
 func (l *LocalControlPlane) Report(payload ReportPayload) error { _ = payload; return nil }
 func (l *LocalControlPlane) ReportDevices(push PushClient, devices map[int][]string) {
 	_, _ = push, devices
+}
+func (l *LocalControlPlane) GFWTask(ctx context.Context) (*gfwcheck.Task, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		return nil, nil
+	}
+}
+func (l *LocalControlPlane) ReportGFWCheck(ctx context.Context, report gfwcheck.Report) error {
+	_, _ = ctx, report
+	return nil
 }
 func (l *LocalControlPlane) Metrics() APIMetrics { return APIMetrics{} }

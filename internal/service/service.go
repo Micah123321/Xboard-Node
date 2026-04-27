@@ -20,6 +20,7 @@ import (
 	"github.com/micah123321/mi-node/internal/cert"
 	"github.com/micah123321/mi-node/internal/config"
 	"github.com/micah123321/mi-node/internal/controlplane"
+	"github.com/micah123321/mi-node/internal/gfwcheck"
 	"github.com/micah123321/mi-node/internal/kernel"
 	"github.com/micah123321/mi-node/internal/kernel/singbox"
 	"github.com/micah123321/mi-node/internal/kernel/xray"
@@ -62,16 +63,17 @@ type Service struct {
 	pushBackoff    apiBackoff // backoff for panel push failures
 
 	// pushActive prevents overlapping push/pull goroutines.
-	pushActive atomic.Bool
-	pullActive atomic.Bool
+	pushActive     atomic.Bool
+	pullActive     atomic.Bool
+	gfwCheckActive atomic.Bool
 	// pullResults delivers async pullViaAPI results back to the main goroutine.
 	pullResults chan pullResult
 
-	wsClient       controlplane.PushClient   // Push client (nil if push is not enabled)
-	wsEvents       chan controlplane.Event   // receives data events from push transport
+	wsClient       controlplane.PushClient        // Push client (nil if push is not enabled)
+	wsEvents       chan controlplane.Event        // receives data events from push transport
 	wsStatusCh     chan controlplane.StatusChange // receives push connectivity notifications
-	wsCancel       context.CancelFunc        // cancels the WS client goroutine
-	wsDisconnectAt time.Time                 // when WS last disconnected (zero if connected)
+	wsCancel       context.CancelFunc             // cancels the WS client goroutine
+	wsDisconnectAt time.Time                      // when WS last disconnected (zero if connected)
 
 	egressProbeMu   sync.RWMutex
 	lastEgressProbe EgressDialCheckResult
@@ -129,7 +131,7 @@ func (b *apiBackoff) onFailure() {
 }
 
 func New(cfg *config.Config) *Service {
-		certMgr := cert.NewManager(cfg.Cert)
+	certMgr := cert.NewManager(cfg.Cert)
 
 	var k kernel.Kernel
 	switch cfg.Kernel.Type {
@@ -180,7 +182,6 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 	defer s.kernel.Stop()
 
-
 	// Set up tickers
 	trackTicker := time.NewTicker(positiveSecondsOrDefault(s.cfg.Node.TrackInterval, 10))
 	pushInterval := time.Duration(math.Max(float64(s.pushInterval), 5)) * time.Second
@@ -188,6 +189,7 @@ func (s *Service) Run(ctx context.Context) error {
 	reportTicker := time.NewTicker(pushInterval)
 	pullTicker := time.NewTicker(pullInterval)
 	deviceReportTicker := time.NewTicker(positiveSecondsOrDefault(s.cfg.Node.DeviceReportInterval, 30))
+	gfwCheckTicker := time.NewTicker(positiveSecondsOrDefault(s.cfg.Node.GFWCheckInterval, 60))
 
 	// WS discovery: when in REST-only mode, periodically re-handshake to check
 	// if WS has been enabled. When WS is disconnected for too long, re-check
@@ -198,6 +200,7 @@ func (s *Service) Run(ctx context.Context) error {
 	defer reportTicker.Stop()
 	defer pullTicker.Stop()
 	defer deviceReportTicker.Stop()
+	defer gfwCheckTicker.Stop()
 	defer wsDiscoveryTicker.Stop()
 
 	s.startWSClient(ctx)
@@ -216,6 +219,9 @@ func (s *Service) Run(ctx context.Context) error {
 
 		case <-deviceReportTicker.C:
 			s.reportDevices()
+
+		case <-gfwCheckTicker.C:
+			s.pullGFWCheckTask(ctx)
 
 		case <-pullTicker.C:
 			// When WebSocket is connected, skip REST polling entirely.
@@ -245,7 +251,6 @@ func (s *Service) initialSetup(ctx context.Context) error {
 	// Register speed limit lookup with kernel unconditionally (before push/poll branch).
 	s.kernel.SetSpeedLimitFunc(s.speedTracker.GetLimiter)
 	s.kernel.SetDeviceLimitFunc(s.limiter.GetDeviceLimitByUUID)
-
 
 	bootstrap, err := s.source.Initial(ctx, s.wsMetrics, s.wsEvents, s.wsStatusCh)
 	if err != nil {
@@ -638,9 +643,54 @@ func (s *Service) handleWSEvent(ctx context.Context, event controlplane.Event) {
 			s.kernel.UpdateGlobalDevices(event.DeviceUsers)
 		}
 
+	case controlplane.EventGFWCheck:
+		if event.GFWCheck != nil {
+			s.runGFWCheckAsync(ctx, event.GFWCheck)
+		}
+
 	default:
 		nlog.Core().Debug(fmt.Sprintf("unknown ws event: %v", event.Type))
 	}
+}
+
+func (s *Service) pullGFWCheckTask(ctx context.Context) {
+	if !s.source.SupportsPolling() {
+		return
+	}
+	task, err := s.source.GFWTask(ctx)
+	if err != nil {
+		nlog.Core().Debug("gfw check task polling failed", "error", err)
+		return
+	}
+	if task == nil {
+		return
+	}
+	s.runGFWCheckAsync(ctx, task)
+}
+
+func (s *Service) runGFWCheckAsync(parent context.Context, task *gfwcheck.Task) {
+	if task == nil || task.CheckID <= 0 {
+		return
+	}
+	if !s.gfwCheckActive.CompareAndSwap(false, true) {
+		nlog.Core().Debug("gfw check already running, skipping", "check_id", task.CheckID)
+		return
+	}
+
+	go func() {
+		defer s.gfwCheckActive.Store(false)
+
+		ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
+		defer cancel()
+
+		nlog.Core().Info("gfw check started", "check_id", task.CheckID)
+		report := gfwcheck.Run(ctx, *task)
+		if err := s.sink.ReportGFWCheck(ctx, report); err != nil {
+			nlog.Core().Error("gfw check report failed", "check_id", task.CheckID, "error", err)
+			return
+		}
+		nlog.Core().Info("gfw check reported", "check_id", task.CheckID, "status", report.Status)
+	}()
 }
 
 // pullViaAPIAsync fetches config/users from the panel API in a background
@@ -1038,8 +1088,12 @@ func (s *Service) pushReportAsync() {
 		defer s.pushActive.Store(false)
 		if err := s.sink.Report(controlplane.ReportPayload{Traffic: traffic, Alive: aliveIPs, Online: online, CPU: status.CPU, Mem: [2]uint64{status.MemTotal, status.MemUsed}, Swap: [2]uint64{status.SwapTotal, status.SwapUsed}, Disk: [2]uint64{status.DiskTotal, status.DiskUsed}, Metrics: metrics}); err != nil {
 			nlog.Core().Error("failed to push report", "error", err)
-			if len(traffic) > 0 { s.tracker.RestoreTraffic(traffic) }
-			if len(aliveIPs) > 0 { s.tracker.RestoreAliveIPs(aliveIPs) }
+			if len(traffic) > 0 {
+				s.tracker.RestoreTraffic(traffic)
+			}
+			if len(aliveIPs) > 0 {
+				s.tracker.RestoreAliveIPs(aliveIPs)
+			}
 			s.pushBackoff.onFailure()
 			return
 		}
