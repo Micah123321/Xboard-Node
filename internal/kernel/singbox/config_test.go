@@ -2,6 +2,7 @@ package singbox
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/micah123321/mi-node/internal/config"
@@ -33,7 +34,7 @@ func TestBuildInbound_Shadowsocks(t *testing.T) {
 		ServerPort: 111,
 		Cipher:     "aes-128-gcm",
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	assertMapValue(t, inbound, "type", "shadowsocks")
 	assertMapValue(t, inbound, "method", "aes-128-gcm")
 	assertMapValue(t, inbound, "listen_port", 111)
@@ -53,7 +54,7 @@ func TestBuildInbound_Shadowsocks2022(t *testing.T) {
 		Cipher:     "2022-blake3-aes-128-gcm",
 		ServerKey:  "MDEyMzQ1Njc4OWFiY2RlZg==",
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	assertMapValue(t, inbound, "method", "2022-blake3-aes-128-gcm")
 	assertMapValue(t, inbound, "password", "MDEyMzQ1Njc4OWFiY2RlZg==")
 }
@@ -65,7 +66,7 @@ func TestBuildInbound_VMess(t *testing.T) {
 		Protocol:   "vmess",
 		ServerPort: 443,
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	assertMapValue(t, inbound, "type", "vmess")
 	assertMapValue(t, inbound, "tag", "vmess-in")
 
@@ -81,12 +82,12 @@ func TestBuildInbound_VMess_WithTLS(t *testing.T) {
 		TLS:        1,
 		ServerName: "example.com",
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "/path/cert.pem", "/path/key.pem")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{CertPEM: []byte("CERT"), KeyPEM: []byte("KEY")})
 	tls := inbound["tls"].(M)
 	assertMapValue(t, tls, "enabled", true)
 	assertMapValue(t, tls, "server_name", "example.com")
-	assertMapValue(t, tls, "certificate_path", "/path/cert.pem")
-	assertMapValue(t, tls, "key_path", "/path/key.pem")
+	assertMapValue(t, tls, "certificate", []string{"CERT"})
+	assertMapValue(t, tls, "key", []string{"KEY"})
 }
 
 // Panel tls=1 with cert_mode none (no paths): inbound must be plain — TLS terminated at nginx/CDN.
@@ -98,7 +99,7 @@ func TestBuildInbound_VMess_TLS_PanelOn_NoCertFiles(t *testing.T) {
 		TLS:        1,
 		ServerName: "example.com",
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	if _, exists := inbound["tls"]; exists {
 		t.Fatal("expected no tls block when cert/key paths are empty (nginx offload)")
 	}
@@ -110,7 +111,7 @@ func TestBuildInbound_VMess_NoTLS(t *testing.T) {
 		ServerPort: 80,
 		TLS:        0,
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	if _, exists := inbound["tls"]; exists {
 		t.Error("should not have TLS when tls=0")
 	}
@@ -128,7 +129,7 @@ func TestBuildInbound_VMess_WithWebSocket(t *testing.T) {
 			},
 		},
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	transport := inbound["transport"].(M)
 	assertMapValue(t, transport, "type", "ws")
 	assertMapValue(t, transport, "path", "/ws")
@@ -143,7 +144,7 @@ func TestBuildInbound_VMess_WithGRPC(t *testing.T) {
 			"serviceName": "mygrpc",
 		},
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	transport := inbound["transport"].(M)
 	assertMapValue(t, transport, "type", "grpc")
 	assertMapValue(t, transport, "service_name", "mygrpc")
@@ -158,7 +159,7 @@ func TestBuildInbound_VMess_WithGRPCCamelCaseServiceName(t *testing.T) {
 			"serviceName": "camel-grpc",
 		},
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	transport := inbound["transport"].(M)
 	assertMapValue(t, transport, "type", "grpc")
 	assertMapValue(t, transport, "service_name", "camel-grpc")
@@ -174,7 +175,7 @@ func TestBuildInbound_VMess_WithH2(t *testing.T) {
 			"host": "example.com",
 		},
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	transport := inbound["transport"].(M)
 	assertMapValue(t, transport, "type", "http")
 	assertMapValue(t, transport, "path", "/h2path")
@@ -190,7 +191,7 @@ func TestBuildInbound_VMess_WithHTTPUpgrade(t *testing.T) {
 			"host": "example.com",
 		},
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	transport := inbound["transport"].(M)
 	assertMapValue(t, transport, "type", "httpupgrade")
 	assertMapValue(t, transport, "path", "/upgrade")
@@ -204,7 +205,7 @@ func TestBuildInbound_VLESS(t *testing.T) {
 		Protocol:   "vless",
 		ServerPort: 443,
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	assertMapValue(t, inbound, "type", "vless")
 
 	users := inbound["users"].([]M)
@@ -217,7 +218,7 @@ func TestBuildInbound_VLESS_WithFlow(t *testing.T) {
 		ServerPort: 443,
 		Flow:       "xtls-rprx-vision",
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	users := inbound["users"].([]M)
 	assertMapValue(t, users[0], "flow", "xtls-rprx-vision")
 }
@@ -234,7 +235,7 @@ func TestBuildInbound_VLESS_Reality(t *testing.T) {
 			"server_name": "www.example.com",
 		},
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	tls := inbound["tls"].(M)
 	assertMapValue(t, tls, "enabled", true)
 
@@ -258,7 +259,7 @@ func TestBuildInbound_VLESS_Reality_ShortIDArray(t *testing.T) {
 			"dest":        "example.com",
 		},
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	reality := inbound["tls"].(M)["reality"].(M)
 	ids := reality["short_id"].([]string)
 	if len(ids) != 2 {
@@ -268,16 +269,29 @@ func TestBuildInbound_VLESS_Reality_ShortIDArray(t *testing.T) {
 
 // --- Trojan ---
 
-func TestBuildInbound_Trojan(t *testing.T) {
+func TestBuildInbound_Trojan_Reality(t *testing.T) {
 	nc := &panel.NodeConfig{
 		Protocol:   "trojan",
 		ServerPort: 443,
+		TLS:        2,
+		TLSSettings: map[string]interface{}{
+			"private_key": "test-private-key",
+			"dest":        "gateway.example.com:8443",
+			"server_name": "cdn.example.com",
+		},
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
-	assertMapValue(t, inbound, "type", "trojan")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{})
+	tls := inbound["tls"].(M)
+	assertMapValue(t, tls, "enabled", true)
+	assertMapValue(t, tls, "server_name", "cdn.example.com")
 
-	users := inbound["users"].([]M)
-	assertMapValue(t, users[0], "password", "aaaaaaaa-1111-2222-3333-444444444444")
+	reality := tls["reality"].(M)
+	assertMapValue(t, reality, "enabled", true)
+	assertMapValue(t, reality, "private_key", "test-private-key")
+
+	handshake := reality["handshake"].(M)
+	assertMapValue(t, handshake, "server", "gateway.example.com")
+	assertMapValue(t, handshake, "server_port", 8443)
 }
 
 func TestBuildInbound_Trojan_NoTLS(t *testing.T) {
@@ -301,7 +315,7 @@ func TestBuildInbound_Trojan_WithTLS(t *testing.T) {
 		TLS:        1,
 		ServerName: "example.com",
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "/c.pem", "/k.pem")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{CertPEM: []byte("CERT"), KeyPEM: []byte("KEY")})
 	tls := inbound["tls"].(M)
 	assertMapValue(t, tls, "enabled", true)
 }
@@ -314,7 +328,7 @@ func TestBuildInbound_Hysteria2(t *testing.T) {
 		ServerPort: 444,
 		Version:    2,
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "/c.pem", "/k.pem")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{CertPEM: []byte("CERT"), KeyPEM: []byte("KEY")})
 	assertMapValue(t, inbound, "type", "hysteria2")
 
 	users := inbound["users"].([]M)
@@ -332,7 +346,7 @@ func TestBuildInbound_Hysteria2_WithObfs(t *testing.T) {
 		Obfs:         "salamander",
 		ObfsPassword: "secret",
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "/c.pem", "/k.pem")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{CertPEM: []byte("CERT"), KeyPEM: []byte("KEY")})
 	obfs := inbound["obfs"].(M)
 	assertMapValue(t, obfs, "type", "salamander")
 	assertMapValue(t, obfs, "password", "secret")
@@ -346,7 +360,7 @@ func TestBuildInbound_Hysteria1(t *testing.T) {
 		UpMbps:     100,
 		DownMbps:   200,
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "/c.pem", "/k.pem")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{CertPEM: []byte("CERT"), KeyPEM: []byte("KEY")})
 	assertMapValue(t, inbound, "type", "hysteria")
 	assertMapValue(t, inbound, "up_mbps", 100)
 	assertMapValue(t, inbound, "down_mbps", 200)
@@ -363,7 +377,7 @@ func TestBuildInbound_TUIC(t *testing.T) {
 		ServerPort:        555,
 		CongestionControl: "bbr",
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "/c.pem", "/k.pem")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{CertPEM: []byte("CERT"), KeyPEM: []byte("KEY")})
 	assertMapValue(t, inbound, "type", "tuic")
 	assertMapValue(t, inbound, "congestion_control", "bbr")
 
@@ -380,7 +394,7 @@ func TestBuildInbound_AnyTLS(t *testing.T) {
 		ServerPort:    443,
 		PaddingScheme: "stop=8\n0=30-30",
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "/c.pem", "/k.pem")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{CertPEM: []byte("CERT"), KeyPEM: []byte("KEY")})
 	assertMapValue(t, inbound, "type", "anytls")
 	assertMapValue(t, inbound, "padding_scheme", "stop=8\n0=30-30")
 
@@ -393,7 +407,7 @@ func TestBuildInbound_AnyTLS_NoPaddingScheme(t *testing.T) {
 		Protocol:   "anytls",
 		ServerPort: 443,
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "/c.pem", "/k.pem")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{CertPEM: []byte("CERT"), KeyPEM: []byte("KEY")})
 	if _, exists := inbound["padding_scheme"]; exists {
 		t.Error("should not have padding_scheme when empty")
 	}
@@ -407,7 +421,7 @@ func TestBuildInbound_Naive(t *testing.T) {
 		ServerPort: 443,
 		TLS:        1,
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "/c.pem", "/k.pem")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{CertPEM: []byte("CERT"), KeyPEM: []byte("KEY")})
 	assertMapValue(t, inbound, "type", "naive")
 
 	users := inbound["users"].([]M)
@@ -425,7 +439,7 @@ func TestBuildInbound_Socks(t *testing.T) {
 		Protocol:   "socks",
 		ServerPort: 1080,
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	assertMapValue(t, inbound, "type", "socks")
 
 	users := inbound["users"].([]M)
@@ -444,7 +458,7 @@ func TestBuildInbound_HTTP(t *testing.T) {
 		Protocol:   "http",
 		ServerPort: 8080,
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	assertMapValue(t, inbound, "type", "http")
 
 	users := inbound["users"].([]M)
@@ -457,7 +471,7 @@ func TestBuildInbound_HTTP_WithTLS(t *testing.T) {
 		ServerPort: 443,
 		TLS:        1,
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "/c.pem", "/k.pem")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{CertPEM: []byte("CERT"), KeyPEM: []byte("KEY")})
 	tls := inbound["tls"].(M)
 	assertMapValue(t, tls, "enabled", true)
 }
@@ -469,7 +483,7 @@ func TestBuildInbound_Unknown(t *testing.T) {
 		Protocol:   "unknown-proto",
 		ServerPort: 999,
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	if inbound != nil {
 		t.Errorf("unknown protocol should return nil, got %v", inbound)
 	}
@@ -484,7 +498,7 @@ func TestBuildConfig(t *testing.T) {
 		ServerPort: 111,
 		Cipher:     "aes-128-gcm",
 	}
-	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, "", "")
+	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, kernel.TLSCert{})
 
 	data, err := json.Marshal(cfg)
 	if err != nil {
@@ -669,7 +683,7 @@ func TestBuildConfig_OutboundPriority(t *testing.T) {
 		},
 	}
 
-	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, "", "")
+	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	outbounds := cfg["outbounds"].([]M)
 
 	// We have 2 overrides in input, so we should have exactly 2 outbounds total
@@ -722,7 +736,7 @@ func TestBuildConfig_AllProtocols_ValidJSON(t *testing.T) {
 
 	for _, tc := range protocols {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := buildConfig(config.KernelConfig{LogLevel: "warn"}, testNodeSpec(tc.nc), testUsers, "/c.pem", "/k.pem")
+			cfg := buildConfig(config.KernelConfig{LogLevel: "warn"}, testNodeSpec(tc.nc), testUsers, kernel.TLSCert{CertPEM: []byte("CERT"), KeyPEM: []byte("KEY")})
 			data, err := json.Marshal(cfg)
 			if err != nil {
 				t.Fatalf("marshal %s: %v", tc.name, err)
@@ -840,20 +854,80 @@ func TestBuildRoutes_MultiMatch(t *testing.T) {
 	assertMapValue(t, allRules[5], "outbound", "direct")
 }
 
+func TestBuildRoutes_WithCustomRouteRules(t *testing.T) {
+	customRules := []model.CustomRouteRule{
+		{
+			Name: "direct-mixed",
+			Match: model.RouteMatch{
+				Domains:        []string{"full.example.com"},
+				DomainSuffixes: []string{"example.org"},
+				IPCIDRs:        []string{"1.1.1.0/24"},
+				Ports:          []string{"53", "1000-1002"},
+				Networks:       []string{"tcp"},
+				SourceCIDRs:    []string{"10.10.0.0/16"},
+				SourcePorts:    []string{"2000-2001"},
+			},
+			Action: model.RouteAction{Type: "direct"},
+		},
+	}
+	route := buildRoutes(nil, customRules, nil)
+	allRules := route["rules"].([]M)
+	if len(allRules) != 9 {
+		t.Fatalf("rules count: got %d, want 9", len(allRules))
+	}
+	if allRules[0]["domain"].([]string)[0] != "full.example.com" {
+		t.Fatalf("unexpected exact domain rule: %v", allRules[0])
+	}
+	if allRules[1]["domain_suffix"].([]string)[0] != "example.org" {
+		t.Fatalf("unexpected domain suffix rule: %v", allRules[1])
+	}
+	if allRules[2]["ip_cidr"].([]string)[0] != "1.1.1.0/24" {
+		t.Fatalf("unexpected ip cidr rule: %v", allRules[2])
+	}
+	if allRules[3]["port"].([]int)[0] != 53 {
+		t.Fatalf("unexpected port rule: %v", allRules[3])
+	}
+	if allRules[4]["network"].([]string)[0] != "tcp" {
+		t.Fatalf("unexpected network rule: %v", allRules[4])
+	}
+	if allRules[5]["source_ip_cidr"].([]string)[0] != "10.10.0.0/16" {
+		t.Fatalf("unexpected source cidr rule: %v", allRules[5])
+	}
+	if allRules[6]["source_port_range"].([]string)[0] != "2000:2001" {
+		t.Fatalf("unexpected source port rule: %v", allRules[6])
+	}
+}
+
+func TestBuildRoutes_StructuredCustomRulesRemainFirst(t *testing.T) {
+	raw := []map[string]any{{"domain": []string{"raw.example.com"}, "outbound": "raw-tag"}}
+	custom := []model.CustomRouteRule{{
+		Match:  model.RouteMatch{DomainSuffixes: []string{"structured.example"}},
+		Action: model.RouteAction{Type: "direct"},
+	}}
+	route := buildRoutes(nil, custom, raw)
+	allRules := route["rules"].([]M)
+	if allRules[0]["outbound"] != "direct" {
+		t.Fatalf("expected structured route first, got %v", allRules[0]["outbound"])
+	}
+	if allRules[1]["outbound"] != "raw-tag" {
+		t.Fatalf("expected raw custom route second, got %v", allRules[1]["outbound"])
+	}
+}
+
 // --- TLS Config ---
 
 func TestBuildTLSConfig_WithCert(t *testing.T) {
 	nc := &panel.NodeConfig{ServerName: "example.com"}
-	tls := buildTLSConfig(testNodeSpec(nc), "/cert.pem", "/key.pem")
+	tls := buildTLSConfig(testNodeSpec(nc), kernel.TLSCert{CertPEM: []byte("CERT"), KeyPEM: []byte("KEY")})
 	assertMapValue(t, tls, "enabled", true)
 	assertMapValue(t, tls, "server_name", "example.com")
-	assertMapValue(t, tls, "certificate_path", "/cert.pem")
-	assertMapValue(t, tls, "key_path", "/key.pem")
+	assertMapValue(t, tls, "certificate", []string{"CERT"})
+	assertMapValue(t, tls, "key", []string{"KEY"})
 }
 
 func TestBuildTLSConfig_NoCert(t *testing.T) {
 	nc := &panel.NodeConfig{ServerName: "example.com"}
-	tls := buildTLSConfig(testNodeSpec(nc), "", "")
+	tls := buildTLSConfig(testNodeSpec(nc), kernel.TLSCert{})
 	if tls != nil {
 		t.Fatal("expected nil TLS config when no certificate files are available")
 	}
@@ -861,7 +935,7 @@ func TestBuildTLSConfig_NoCert(t *testing.T) {
 
 func TestBuildTLSConfig_FallbackToHost(t *testing.T) {
 	nc := &panel.NodeConfig{Host: "fallback.com"}
-	tls := buildTLSConfig(testNodeSpec(nc), "/c.pem", "/k.pem")
+	tls := buildTLSConfig(testNodeSpec(nc), kernel.TLSCert{CertPEM: []byte("CERT"), KeyPEM: []byte("KEY")})
 	assertMapValue(t, tls, "server_name", "fallback.com")
 }
 
@@ -872,7 +946,7 @@ func TestBuildTLSConfig_TLSSettingsOverride(t *testing.T) {
 			"server_name": "override.com",
 		},
 	}
-	tls := buildTLSConfig(testNodeSpec(nc), "/c.pem", "/k.pem")
+	tls := buildTLSConfig(testNodeSpec(nc), kernel.TLSCert{CertPEM: []byte("CERT"), KeyPEM: []byte("KEY")})
 	assertMapValue(t, tls, "server_name", "override.com")
 }
 
@@ -936,8 +1010,51 @@ func assertMapValue(t *testing.T, m M, key string, expected interface{}) {
 			t.Errorf("%s: got %v (type %T), want %d", key, val, val, e)
 		}
 	default:
-		if val != expected {
+		if !reflect.DeepEqual(val, expected) {
 			t.Errorf("%s: got %v, want %v", key, val, expected)
 		}
+	}
+}
+
+func TestExtractECHInbound(t *testing.T) {
+	tests := []struct {
+		name      string
+		tls       map[string]interface{}
+		expectNil bool
+		expectKey []string
+	}{
+		{"no ech", map[string]interface{}{}, true, nil},
+		{"disabled", map[string]interface{}{"ech": map[string]interface{}{"enabled": false}}, true, nil},
+		{"enabled with key", map[string]interface{}{"ech": map[string]interface{}{
+			"enabled": true,
+			"key":     "-----BEGIN ECH KEYS-----\nABCD\n-----END ECH KEYS-----\n",
+		}}, false, []string{"-----BEGIN ECH KEYS-----\nABCD\n-----END ECH KEYS-----\n"}},
+		{"enabled with key_path", map[string]interface{}{"ech": map[string]interface{}{
+			"enabled":  true,
+			"key_path": "/etc/ech/keys.pem",
+		}}, false, nil},
+		{"enabled no key", map[string]interface{}{"ech": map[string]interface{}{"enabled": true}}, false, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractECHInbound(tt.tls)
+			if tt.expectNil {
+				if result != nil {
+					t.Errorf("expected nil, got %v", result)
+				}
+				return
+			}
+			if result == nil {
+				t.Fatal("expected non-nil result")
+			}
+			if result["enabled"] != true {
+				t.Errorf("expected enabled=true, got %v", result["enabled"])
+			}
+			if tt.expectKey != nil {
+				if !reflect.DeepEqual(result["key"], tt.expectKey) {
+					t.Errorf("key: got %v, want %v", result["key"], tt.expectKey)
+				}
+			}
+		})
 	}
 }

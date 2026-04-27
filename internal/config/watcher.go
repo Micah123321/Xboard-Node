@@ -57,6 +57,38 @@ func WatchConfig(ctx context.Context, path string, onChange func(*Config)) (*Wat
 	return w, nil
 }
 
+
+// WatchConfigRoot watches path and reloads the root config model.
+func WatchConfigRoot(ctx context.Context, path string, onChange func(*RootConfig)) (*Watcher, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+
+	fsw, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, err
+	}
+
+	dir := filepath.Dir(absPath)
+	if err := fsw.Add(dir); err != nil {
+		fsw.Close()
+		return nil, err
+	}
+
+	w := &Watcher{
+		path:         absPath,
+		debounce:     1 * time.Second,
+		onChangeRoot: onChange,
+		watcher:      fsw,
+		stopCh:       make(chan struct{}),
+	}
+
+	go w.loop(ctx)
+	nlog.Core().Info("config watcher started", "path", absPath)
+	return w, nil
+}
+
 func (w *Watcher) loop(ctx context.Context) {
 	var timer *time.Timer
 	defer func() {

@@ -1,6 +1,7 @@
 package singbox
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -42,8 +43,7 @@ type SingBox struct {
 
 	users      []model.UserSpec
 	nodeConfig *model.NodeSpec
-	certFile   string
-	keyFile    string
+	tls        kernel.TLSCert
 
 	// connTracker is our lightweight in-process byte/IP tracker.
 	// Created fresh on every Start (full restart).
@@ -85,7 +85,7 @@ func (s *SingBox) Capabilities() kernel.Capabilities {
 func (s *SingBox) Protocols() []string {
 	return []string{
 		"vmess", "vless", "trojan", "shadowsocks",
-		"hysteria2", "tuic", "naive", "socks", "http", "anytls", "mieru",
+		"hysteria", "hysteria2", "tuic", "naive", "socks", "http", "anytls", "mieru",
 	}
 }
 
@@ -97,7 +97,7 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, cert
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cfgMap := buildConfig(s.cfg, nodeConfig, users, certFile, keyFile)
+	cfgMap := buildConfig(s.cfg, nodeConfig, users, tls)
 	data, err := json.Marshal(cfgMap)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
@@ -141,8 +141,7 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, cert
 	s.cancel = cancel
 	s.users = users
 	s.nodeConfig = nodeConfig
-	s.certFile = certFile
-	s.keyFile = keyFile
+	s.tls = tls
 
 	// Fresh tracker on full restart.
 	s.connTracker = NewConnTracker(0)
@@ -210,7 +209,7 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, cer
 		return fmt.Errorf("not running")
 	}
 
-	cfgMap := buildConfig(s.cfg, nodeConfig, users, certFile, keyFile)
+	cfgMap := buildConfig(s.cfg, nodeConfig, users, tls)
 	data, err := json.Marshal(cfgMap)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
@@ -241,7 +240,8 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, cer
 	nopFactory := singLog.NewNOPFactory()
 
 	// Configuration hash check for inbound reconstruction
-	configChanged := s.nodeConfig == nil || kernel.ComputeHash(nodeConfig, users) != kernel.ComputeHash(s.nodeConfig, s.users)
+	tlsChanged := !bytes.Equal(s.tls.CertPEM, tls.CertPEM) || !bytes.Equal(s.tls.KeyPEM, tls.KeyPEM)
+	configChanged := tlsChanged || s.nodeConfig == nil || kernel.ComputeHash(nodeConfig, users) != kernel.ComputeHash(s.nodeConfig, s.users)
 
 	for _, inb := range opts.Inbounds {
 		tag := inb.Tag
@@ -319,8 +319,7 @@ func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, cer
 	nlog.Core().Debug("sing-box reloaded", "users", len(users))
 	s.users = users
 	s.nodeConfig = nodeConfig
-	s.certFile = certFile
-	s.keyFile = keyFile
+	s.tls = tls
 	return nil
 }
 

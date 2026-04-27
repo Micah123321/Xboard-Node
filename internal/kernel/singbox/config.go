@@ -18,7 +18,7 @@ import (
 // M is a shorthand for building JSON-like maps
 type M = map[string]interface{}
 
-func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
+func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	var outbounds []M
 	tags := make(map[string]bool)
 
@@ -62,7 +62,7 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 		cfg["dns"] = buildDefaultDNSConfig()
 	}
 
-	inbound := buildInbound(nc, users, certFile, keyFile)
+	inbound := buildInbound(nc, users, tc)
 	if inbound != nil {
 		cfg["inbounds"] = []M{inbound}
 	}
@@ -73,7 +73,7 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 	// Automatically enable rule_set caching (cache_file) when panel routes
 	// reference geoip:/geosite: entries so that the downloaded .srs rule_set
 	// files survive across process restarts.
-	if kernel.NeedsGeoIP(nc.Routes) || kernel.NeedsGeoSite(nc.Routes) {
+	if kernel.NeedsGeoIP(nc.Routes) || kernel.NeedsGeoSite(nc.Routes) || kernel.NeedsGeoIPRules(nc.CustomRouteRules) || kernel.NeedsGeoSiteRules(nc.CustomRouteRules) {
 		cfg["experimental"] = M{
 			"cache_file": M{
 				"enabled": true,
@@ -259,75 +259,170 @@ func buildRoutes(kcfg config.KernelConfig, panelRoutes []model.RouteRule, custom
 		})
 	}
 
-	// Panel-defined routes (usually specific blocks/proxies)
 	for _, pr := range panelRoutes {
-		if len(pr.Match) == 0 {
-			continue
-		}
-
-		var domains, cidrs []string
-		for _, m := range pr.Match {
-			m = strings.TrimSpace(m)
-			if m == "" {
-				continue
-			}
-			// Strip leading wildcard for domain matching
-			if strings.HasPrefix(m, "*.") {
-				m = strings.TrimPrefix(m, "*.")
-			}
-			// Check if it's a CIDR block (contains /)
-			if strings.Contains(m, "/") {
-				cidrs = append(cidrs, m)
-			} else {
-				// Otherwise treat as domain
-				domains = append(domains, m)
-			}
-		}
-
-		// Determine outbound tag based on action
-		outbound := "block"
-		if pr.Action == "direct" {
-			outbound = "direct"
-		} else if pr.Action == "dns" {
-			// Special case for sing-box DNS routing:
-			// If action is "dns" and action_value is provided, we use it as the server name.
-			// Otherwise it defaults to "dns-out".
-			server := "dns-out"
-			if pr.ActionValue != "" {
-				server = pr.ActionValue
-			}
-			outbound = server
-		} else if pr.Action == "proxy" {
-			// If panel provides a specific outbound tag in action_value, use it.
-			// This allows routing to WARP_JP etc. via normal routes.
-			if pr.ActionValue != "" {
-				outbound = pr.ActionValue
-			}
-		}
-
-		// Create separate rule for domains
-		if len(domains) > 0 {
-			rule := M{
-				"domain_suffix": domains,
-				"outbound":      outbound,
-			}
-			rules = append(rules, rule)
-		}
-
-		// Create separate rule for CIDRs
-		if len(cidrs) > 0 {
-			rule := M{
-				"ip_cidr":  cidrs,
-				"outbound": outbound,
-			}
-			rules = append(rules, rule)
-		}
+		rules = append(rules, compilePanelRouteRule(pr)...)
 	}
 
 	return M{
 		"final": kcfg.Egress.DefaultOutboundTag(),
 		"rules": rules,
 	}
+}
+
+func compilePanelRouteRule(pr model.RouteRule) []M {
+	if len(pr.Match) == 0 {
+		return nil
+	}
+
+	var domains, cidrs []string
+	for _, item := range pr.Match {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		item = strings.TrimPrefix(item, "*.")
+		if strings.Contains(item, "/") {
+			cidrs = append(cidrs, item)
+			continue
+		}
+		domains = append(domains, item)
+	}
+
+	outbound := "block"
+	switch pr.Action {
+	case "direct":
+		outbound = "direct"
+	case "dns":
+		if pr.ActionValue != "" {
+			outbound = pr.ActionValue
+		} else {
+			outbound = "dns-out"
+		}
+	case "proxy":
+		if pr.ActionValue != "" {
+			outbound = pr.ActionValue
+		}
+	}
+
+	var compiled []M
+	if len(domains) > 0 {
+		compiled = append(compiled, M{
+			"domain_suffix": copyStrings(domains),
+			"outbound":      outbound,
+		})
+	}
+	if len(cidrs) > 0 {
+		compiled = append(compiled, M{
+			"ip_cidr":  copyStrings(cidrs),
+			"outbound": outbound,
+		})
+	}
+	return compiled
+}
+
+func compileCustomRouteRule(rule model.CustomRouteRule) []M {
+	if rule.Disabled {
+		return nil
+	}
+
+	outbound := singboxOutboundForAction(rule.Action)
+	var compiled []M
+
+	if len(rule.Match.Domains) > 0 {
+		compiled = append(compiled, M{
+			"domain":   copyStrings(rule.Match.Domains),
+			"outbound": outbound,
+		})
+	}
+	if len(rule.Match.DomainSuffixes) > 0 {
+		compiled = append(compiled, M{
+			"domain_suffix": copyStrings(rule.Match.DomainSuffixes),
+			"outbound":      outbound,
+		})
+	}
+	if len(rule.Match.IPCIDRs) > 0 {
+		compiled = append(compiled, M{
+			"ip_cidr":  copyStrings(rule.Match.IPCIDRs),
+			"outbound": outbound,
+		})
+	}
+	if len(rule.Match.Ports) > 0 {
+		ports, portRanges := splitPorts(rule.Match.Ports)
+		entry := M{"outbound": outbound}
+		if len(ports) > 0 {
+			entry["port"] = ports
+		}
+		if len(portRanges) > 0 {
+			entry["port_range"] = portRanges
+		}
+		compiled = append(compiled, entry)
+	}
+	if len(rule.Match.Networks) > 0 {
+		compiled = append(compiled, M{
+			"network":  copyStrings(rule.Match.Networks),
+			"outbound": outbound,
+		})
+	}
+	if len(rule.Match.SourceCIDRs) > 0 {
+		compiled = append(compiled, M{
+			"source_ip_cidr": copyStrings(rule.Match.SourceCIDRs),
+			"outbound":       outbound,
+		})
+	}
+	if len(rule.Match.SourcePorts) > 0 {
+		ports, portRanges := splitPorts(rule.Match.SourcePorts)
+		entry := M{"outbound": outbound}
+		if len(ports) > 0 {
+			entry["source_port"] = ports
+		}
+		if len(portRanges) > 0 {
+			entry["source_port_range"] = portRanges
+		}
+		compiled = append(compiled, entry)
+	}
+	return compiled
+}
+
+func singboxOutboundForAction(action model.RouteAction) string {
+	switch action.Type {
+	case "direct":
+		return "direct"
+	case "route":
+		if action.Target != "" {
+			return action.Target
+		}
+		return "block"
+	default:
+		return "block"
+	}
+}
+
+func splitPorts(values []string) ([]int, []string) {
+	var ports []int
+	var ranges []string
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if strings.ContainsAny(value, ":-") {
+			ranges = append(ranges, strings.ReplaceAll(value, "-", ":"))
+			continue
+		}
+		if port, err := strconv.Atoi(value); err == nil {
+			ports = append(ports, port)
+		}
+	}
+	return ports, ranges
+}
+
+func copyStrings(src []string) []string {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]string, len(src))
+	copy(out, src)
+	return out
 }
 
 func mergeCustomSingbox(cfg M, kcfg config.KernelConfig) {
@@ -408,7 +503,7 @@ func mergeCustomSingboxRoute(cfg M, customRoute map[string]any) {
 	}
 }
 
-func buildInbound(nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
+func buildInbound(nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	base := M{
 		"tag":         nc.Protocol + "-in",
 		"listen":      "::",
@@ -419,23 +514,23 @@ func buildInbound(nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile 
 	case "shadowsocks":
 		return buildShadowsocks(base, nc, users)
 	case "vmess":
-		return buildVMess(base, nc, users, certFile, keyFile)
+		return buildVMess(base, nc, users, tc)
 	case "vless":
-		return buildVLESS(base, nc, users, certFile, keyFile)
+		return buildVLESS(base, nc, users, tc)
 	case "trojan":
-		return buildTrojan(base, nc, users, certFile, keyFile)
+		return buildTrojan(base, nc, users, tc)
 	case "hysteria":
-		return buildHysteria(base, nc, users, certFile, keyFile)
+		return buildHysteria(base, nc, users, tc)
 	case "tuic":
-		return buildTUIC(base, nc, users, certFile, keyFile)
+		return buildTUIC(base, nc, users, tc)
 	case "anytls":
-		return buildAnyTLS(base, nc, users, certFile, keyFile)
+		return buildAnyTLS(base, nc, users, tc)
 	case "naive":
-		return buildNaive(base, nc, users, certFile, keyFile)
+		return buildNaive(base, nc, users, tc)
 	case "socks":
 		return buildSocks(base, users)
 	case "http":
-		return buildHTTP(base, nc, users, certFile, keyFile)
+		return buildHTTP(base, nc, users, tc)
 	case "mieru":
 		return buildMieru(base, nc, users)
 	default:
@@ -515,7 +610,7 @@ func buildShadowsocks(base M, nc *model.NodeSpec, users []model.UserSpec) M {
 	return base
 }
 
-func buildVMess(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
+func buildVMess(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	base["type"] = "vmess"
 
 	userList := make([]M, 0, len(users))
@@ -533,7 +628,7 @@ func buildVMess(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, ke
 	applyMultiplex(base, nc)
 
 	if nc.TLS == 1 {
-		if tls := buildTLSConfig(nc, certFile, keyFile); tls != nil {
+		if tls := buildTLSConfig(nc, tc); tls != nil {
 			base["tls"] = tls
 		}
 	}
@@ -541,7 +636,7 @@ func buildVMess(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, ke
 	return base
 }
 
-func buildVLESS(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
+func buildVLESS(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	if nc.Decryption != "" && nc.Decryption != "none" {
 		nlog.Core().Warn("sing-box does not support VLESS encryption (decryption), use xray kernel for this feature")
 	}
@@ -566,7 +661,7 @@ func buildVLESS(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, ke
 	applyMultiplex(base, nc)
 
 	if nc.TLS == 1 {
-		if tls := buildTLSConfig(nc, certFile, keyFile); tls != nil {
+		if tls := buildTLSConfig(nc, tc); tls != nil {
 			base["tls"] = tls
 		}
 	} else if nc.TLS == 2 {
@@ -576,7 +671,7 @@ func buildVLESS(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, ke
 	return base
 }
 
-func buildTrojan(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
+func buildTrojan(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	base["type"] = "trojan"
 
 	userList := make([]M, len(users))
@@ -594,7 +689,7 @@ func buildTrojan(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, k
 	applyMultiplex(base, nc)
 
 	if nc.TLS == 1 {
-		if tls := buildTLSConfig(nc, certFile, keyFile); tls != nil {
+		if tls := buildTLSConfig(nc, tc); tls != nil {
 			base["tls"] = tls
 		}
 	} else if nc.TLS == 2 {
@@ -617,7 +712,7 @@ func buildTrojan(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, k
 	return base
 }
 
-func buildHysteria(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
+func buildHysteria(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	if nc.Version == 2 {
 		base["type"] = "hysteria2"
 
@@ -655,7 +750,7 @@ func buildHysteria(base M, nc *model.NodeSpec, users []model.UserSpec, certFile,
 		}
 	}
 
-	tls := buildTLSConfig(nc, certFile, keyFile)
+	tls := buildTLSConfig(nc, tc)
 	if tls == nil {
 		nlog.Core().Warn("hysteria requires TLS certificate files on disk; configure cert_mode (self, file, http, dns, or content). Sing-box will not start this inbound without tls.")
 		return base
@@ -668,7 +763,7 @@ func buildHysteria(base M, nc *model.NodeSpec, users []model.UserSpec, certFile,
 	return base
 }
 
-func buildTUIC(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
+func buildTUIC(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	base["type"] = "tuic"
 
 	userList := make([]M, 0, len(users))
@@ -685,7 +780,7 @@ func buildTUIC(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, key
 		base["congestion_control"] = nc.CongestionControl
 	}
 
-	tls := buildTLSConfig(nc, certFile, keyFile)
+	tls := buildTLSConfig(nc, tc)
 	if tls == nil {
 		nlog.Core().Warn("tuic requires TLS certificate files on disk; configure cert_mode (self, file, http, dns, or content). Sing-box will not start this inbound without tls.")
 		return base
@@ -698,7 +793,7 @@ func buildTUIC(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, key
 	return base
 }
 
-func buildAnyTLS(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
+func buildAnyTLS(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	base["type"] = "anytls"
 
 	userList := make([]M, 0, len(users))
@@ -714,7 +809,7 @@ func buildAnyTLS(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, k
 		base["padding_scheme"] = nc.PaddingScheme
 	}
 
-	if tls := buildTLSConfig(nc, certFile, keyFile); tls != nil {
+	if tls := buildTLSConfig(nc, tc); tls != nil {
 		base["tls"] = tls
 	} else {
 		nlog.Core().Warn("anytls requires TLS certificate files on disk; configure cert_mode (self, file, http, dns, or content). Sing-box will not start this inbound without tls.")
@@ -722,7 +817,7 @@ func buildAnyTLS(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, k
 	return base
 }
 
-func buildNaive(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
+func buildNaive(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	base["type"] = "naive"
 
 	userList := make([]M, 0, len(users))
@@ -735,7 +830,7 @@ func buildNaive(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, ke
 	base["users"] = userList
 
 	if nc.TLS == 1 {
-		if tls := buildTLSConfig(nc, certFile, keyFile); tls != nil {
+		if tls := buildTLSConfig(nc, tc); tls != nil {
 			base["tls"] = tls
 		}
 	}
@@ -756,7 +851,7 @@ func buildSocks(base M, users []model.UserSpec) M {
 	return base
 }
 
-func buildHTTP(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
+func buildHTTP(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	base["type"] = "http"
 
 	userList := make([]M, 0, len(users))
@@ -770,7 +865,7 @@ func buildHTTP(base M, nc *model.NodeSpec, users []model.UserSpec, certFile, key
 
 	applyProxyProtocol(base, nc)
 	if nc.TLS == 1 {
-		if tls := buildTLSConfig(nc, certFile, keyFile); tls != nil {
+		if tls := buildTLSConfig(nc, tc); tls != nil {
 			base["tls"] = tls
 		}
 	}
@@ -833,31 +928,33 @@ func applyTransport(base M, nc *model.NodeSpec) {
 	base["transport"] = transport
 }
 
-// buildTLSConfig returns sing-box inbound TLS options when certificate and key paths exist.
-// If either path is missing, it returns nil: the inbound should run without a TLS layer
-// (e.g. TLS terminated at nginx/CDN while the panel still shows tls=1).
-// Sing-box does not accept a magic "self-signed" path — it tries to open that name as a file.
-func buildTLSConfig(nc *model.NodeSpec, certFile, keyFile string) M {
-	if certFile == "" || keyFile == "" {
+// buildTLSConfig returns sing-box inbound TLS options when certificate material
+// is available. Returns nil if no TLS material is provided.
+func buildTLSConfig(nc *model.NodeSpec, tc kernel.TLSCert) M {
+	if !tc.HasCert() {
 		return nil
 	}
 
-	tls := M{"enabled": true}
+	t := M{"enabled": true}
 
 	serverName := nc.ServerName
 	if serverName == "" && nc.Host != "" {
 		serverName = nc.Host
 	}
 	if serverName != "" {
-		tls["server_name"] = serverName
+		t["server_name"] = serverName
 	}
 
 	if nc.TLSSettings != nil {
 		if sn, ok := nc.TLSSettings["server_name"]; ok && sn != "" {
-			tls["server_name"] = sn
+			t["server_name"] = sn
 		}
 		if alpn, ok := nc.TLSSettings["alpn"]; ok {
-			tls["alpn"] = alpn
+			t["alpn"] = alpn
+		}
+		// ECH server-side: only key/key_path needed for inbound
+		if ech := extractECHInbound(nc.TLSSettings); ech != nil {
+			t["ech"] = ech
 		}
 	}
 
@@ -866,7 +963,7 @@ func buildTLSConfig(nc *model.NodeSpec, certFile, keyFile string) M {
 		tls["key_path"] = keyFile
 	}
 
-	return tls
+	return t
 }
 
 func buildRealityConfig(nc *model.NodeSpec) M {
@@ -968,4 +1065,35 @@ func applyProxyProtocol(base M, nc *model.NodeSpec) {
 	// 	return
 	// }
 	// base["proxy_protocol"] = true
+}
+
+// extractECHInbound extracts ECH config for sing-box server (inbound).
+// sing-box InboundECHOptions needs: enabled, key (PEM array), key_path.
+func extractECHInbound(tlsSettings map[string]interface{}) M {
+	echRaw, ok := tlsSettings["ech"]
+	if !ok {
+		return nil
+	}
+	echMap, ok := echRaw.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	enabled, _ := echMap["enabled"].(bool)
+	if !enabled {
+		return nil
+	}
+	ech := M{"enabled": true}
+	hasSource := false
+	if key, _ := echMap["key"].(string); key != "" {
+		ech["key"] = []string{key} // sing-box expects PEM as-is
+		hasSource = true
+	}
+	if keyPath, _ := echMap["key_path"].(string); keyPath != "" {
+		ech["key_path"] = keyPath
+		hasSource = true
+	}
+	if !hasSource {
+		nlog.Core().Warn("ECH enabled but no key or key_path provided")
+	}
+	return ech // let sing-box report a clear error if key is missing
 }

@@ -15,6 +15,7 @@ import (
 type PanelControlPlane struct {
 	cfg    config.PanelConfig
 	wsCfg  config.WSConfig
+	kcfg   config.KernelConfig
 	client *panel.Client
 }
 
@@ -22,10 +23,11 @@ type panelPushClient struct {
 	inner *panel.WSClient
 }
 
-func NewPanelControlPlane(panelCfg config.PanelConfig, wsCfg config.WSConfig) *PanelControlPlane {
+func NewPanelControlPlane(panelCfg config.PanelConfig, wsCfg config.WSConfig, kcfg config.KernelConfig) *PanelControlPlane {
 	return &PanelControlPlane{
 		cfg:    panelCfg,
 		wsCfg:  wsCfg,
+		kcfg:   kcfg,
 		client: panel.NewClient(panelCfg),
 	}
 }
@@ -59,7 +61,10 @@ func (p *PanelControlPlane) Initial(ctx context.Context, metricsFn func() map[st
 	if err != nil {
 		return Bootstrap{}, fmt.Errorf("initial user fetch: %w", err)
 	}
-	bootstrap.Config = model.NodeSpecFromPanel(configSnapshot)
+	bootstrap.Config, err = model.NodeSpecFromPanelValidated(configSnapshot, p.kcfg)
+	if err != nil {
+		return Bootstrap{}, fmt.Errorf("initial config normalize: %w", err)
+	}
 	bootstrap.Users = model.UserSpecsFromPanel(users)
 	return bootstrap, nil
 }
@@ -78,7 +83,11 @@ func (p *PanelControlPlane) Poll(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, ctx.Err()
 	default:
 	}
-	return Snapshot{Config: model.NodeSpecFromPanel(configSnapshot), Users: model.UserSpecsFromPanel(users)}, nil
+	nodeSpec, err := model.NodeSpecFromPanelValidated(configSnapshot, p.kcfg)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("poll config normalize: %w", err)
+	}
+	return Snapshot{Config: nodeSpec, Users: model.UserSpecsFromPanel(users)}, nil
 }
 
 func (p *PanelControlPlane) Discover(ctx context.Context, metricsFn func() map[string]interface{}, events chan<- Event, statuses chan<- StatusChange) (PushClient, error) {
@@ -143,11 +152,19 @@ func (p *PanelControlPlane) newPushClient(metricsFn func() map[string]interface{
 		p.cfg.NodeID,
 		cfg,
 		func(event panel.WSEvent) {
-			translated := translateWSEvent(event)
+			translated, err := TranslateWSEvent(event, p.kcfg)
+			if err != nil {
+				nlog.Core().Warn("invalid ws event config, dropping event", "type", event.Type, "error", err)
+				return
+			}
 			select {
 			case events <- translated:
 			default:
 				nlog.Core().Warn("ws event channel full, dropping event", "type", translated.Type)
+				select {
+				case statuses <- StatusChange{Connected: true, NeedsResync: true}:
+				default:
+				}
 			}
 		},
 		func(status panel.WSStatusChange) {
@@ -169,7 +186,11 @@ func translateWSEvent(event panel.WSEvent) Event {
 		GFWCheck:    event.GFWCheck,
 	}
 	if event.Config != nil {
-		translated.Config = model.NodeSpecFromPanel(event.Config)
+		var err error
+		translated.Config, err = model.NodeSpecFromPanelValidated(event.Config, kcfg)
+		if err != nil {
+			return Event{}, fmt.Errorf("translate node config: %w", err)
+		}
 	}
 	if event.Users != nil {
 		translated.Users = model.UserSpecsFromPanel(event.Users)
@@ -177,7 +198,7 @@ func translateWSEvent(event panel.WSEvent) Event {
 	if event.DeltaUsers != nil {
 		translated.DeltaUsers = model.UserSpecsFromPanel(event.DeltaUsers)
 	}
-	return translated
+	return translated, nil
 }
 
 func (p *panelPushClient) Run(ctx context.Context) { p.inner.Run(ctx) }

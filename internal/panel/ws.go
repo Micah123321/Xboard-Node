@@ -21,6 +21,7 @@ const (
 	WSEventSyncUsers     = "sync.users"
 	WSEventSyncUserDelta = "sync.user.delta"
 	WSEventSyncDevices   = "sync.devices"   // panel → node: global device state
+	WSEventSyncNodes     = "sync.nodes"     // panel → machine: node list changed
 	WSEventReportDevices = "report.devices" // node → panel: report device snapshot
 	WSEventGFWCheck      = "gfw.check"      // panel → node: run GFW reachability check
 )
@@ -50,27 +51,36 @@ type wsMessage struct {
 	Timestamp int64           `json:"timestamp,omitempty"`
 }
 
-// Payload structures for data events
+// Payload structures for data events.
 type syncConfigPayload struct {
 	Config    NodeConfig `json:"config"`
 	Timestamp int64      `json:"timestamp"`
+	NodeID    int        `json:"node_id"`
 }
 
 type syncUsersPayload struct {
 	Users     []User `json:"users"`
 	Timestamp int64  `json:"timestamp"`
+	NodeID    int    `json:"node_id"`
 }
 
 type syncUserDeltaPayload struct {
 	Action    string `json:"action"`
 	Users     []User `json:"users"`
 	Timestamp int64  `json:"timestamp"`
+	NodeID    int    `json:"node_id"`
 }
 
 // syncDevicesPayload carries global device state from panel.
 type syncDevicesPayload struct {
 	Users     map[int][]string `json:"users"`
 	Timestamp int64            `json:"timestamp"`
+	NodeID    int              `json:"node_id"`
+}
+
+// syncNodesPayload carries the updated node list for a machine.
+type syncNodesPayload struct {
+	Nodes []MachineNode `json:"nodes"`
 }
 
 // WSClientConfig holds WebSocket client tuning options.
@@ -79,6 +89,7 @@ type WSClientConfig struct {
 	HandshakeTimeout time.Duration
 	BackoffInitial   time.Duration
 	BackoffMax       time.Duration
+	MachineID        int
 }
 
 // WSClient connects to the panel's Workerman WS server using native WebSocket.
@@ -185,14 +196,17 @@ func (w *WSClient) Run(ctx context.Context) {
 }
 
 func (w *WSClient) connect(ctx context.Context) error {
-	// Build WS URL with auth query params
 	u, err := url.Parse(w.wsURL)
 	if err != nil {
 		return fmt.Errorf("parse ws url: %w", err)
 	}
 	q := u.Query()
 	q.Set("token", w.token)
-	q.Set("node_id", strconv.Itoa(w.nodeID))
+	if w.cfg.MachineID > 0 {
+		q.Set("machine_id", strconv.Itoa(w.cfg.MachineID))
+	} else {
+		q.Set("node_id", strconv.Itoa(w.nodeID))
+	}
 	u.RawQuery = q.Encode()
 
 	nlog.Core().Debug("ws connecting", "url", u.String())
@@ -241,7 +255,11 @@ func (w *WSClient) connect(ctx context.Context) error {
 	reportTicker := time.NewTicker(w.cfg.StatusInterval)
 	defer reportTicker.Stop()
 
-	msgCh := make(chan wsMessage, 16)
+	// writeCh decouples data collection from network I/O.
+	writeCh := make(chan wsMessage, 16)
+	w.writeCh = writeCh
+	defer func() { w.writeCh = nil }()
+
 	errCh := make(chan error, 1)
 	done := make(chan struct{})
 	go func() {
@@ -256,20 +274,16 @@ func (w *WSClient) connect(ctx context.Context) error {
 				return
 			}
 			nlog.Core().Debug("ws recv", "event", msg.Event, "data", string(msg.Data))
-			select {
-			case msgCh <- msg:
-			case <-ctx.Done():
-				return
-			default:
-				nlog.Core().Warn("ws: message channel full, dropping message", "event", msg.Event)
+			w.handleMessage(msg)
+			if msg.Event == "ping" {
+				select {
+				case writeCh <- wsMessage{Event: "pong"}:
+				default:
+					nlog.Core().Warn("ws write channel full, skipping pong")
+				}
 			}
 		}
 	}()
-
-	// writeCh decouples data collection from network I/O.
-	writeCh := make(chan wsMessage, 16)
-	w.writeCh = writeCh
-	defer func() { w.writeCh = nil }()
 
 	for {
 		select {
@@ -282,17 +296,6 @@ func (w *WSClient) connect(ctx context.Context) error {
 
 		case err := <-errCh:
 			return fmt.Errorf("read: %w", err)
-
-		case msg := <-msgCh:
-			w.handleMessage(msg)
-			if msg.Event == "ping" {
-				// Queue an immediate pong
-				select {
-				case writeCh <- wsMessage{Event: "pong"}:
-				default:
-					nlog.Core().Warn("ws write channel full, skipping pong")
-				}
-			}
 
 		case <-reportTicker.C:
 			// Send periodic node.status via WebSocket
@@ -376,6 +379,11 @@ func (w *WSClient) handleDataEvent(msg wsMessage) {
 			return
 		}
 		event.Config = &p.Config
+		if p.NodeID > 0 {
+			event.NodeID = p.NodeID
+		} else if p.Config.NodeID > 0 {
+			event.NodeID = p.Config.NodeID
+		}
 
 	case WSEventSyncUsers:
 		nlog.Core().Debug("ws sync users event received")
@@ -389,6 +397,7 @@ func (w *WSClient) handleDataEvent(msg wsMessage) {
 			return
 		}
 		event.Users = p.Users
+		event.NodeID = p.NodeID
 
 	case WSEventSyncUserDelta:
 		nlog.Core().Debug("ws sync user delta event received")
@@ -407,6 +416,7 @@ func (w *WSClient) handleDataEvent(msg wsMessage) {
 		}
 		event.DeltaAction = p.Action
 		event.DeltaUsers = p.Users
+		event.NodeID = p.NodeID
 
 	case WSEventSyncDevices:
 		nlog.Core().Debug("ws sync devices event received")
@@ -435,26 +445,59 @@ func (w *WSClient) handleDataEvent(msg wsMessage) {
 }
 
 // SendDeviceReport sends local device snapshot to panel via WS.
-// Format: {"123": ["1.1.1.1", "2.2.2.2"], "456": ["3.3.3.3"]}
 func (w *WSClient) SendDeviceReport(devices map[int][]string) {
+	w.SendDeviceReportForNode(0, devices)
+}
+
+// SendDeviceReportForNode sends a device report tagged with a specific node_id.
+// nodeID == 0 omits the field (legacy single-node mode).
+func (w *WSClient) SendDeviceReportForNode(nodeID int, devices map[int][]string) {
 	if !w.connected.Load() {
 		return
 	}
 
-	msg := wsMessage{
-		Event:     WSEventReportDevices,
-		Timestamp: time.Now().Unix(),
+	var payload interface{}
+	if nodeID > 0 {
+		payload = map[string]interface{}{"node_id": nodeID, "devices": devices}
+	} else {
+		payload = devices
 	}
-	d, err := json.Marshal(devices)
+
+	d, err := json.Marshal(payload)
 	if err != nil {
 		return
 	}
-	msg.Data = d
+	msg := wsMessage{
+		Event:     WSEventReportDevices,
+		Data:      d,
+		Timestamp: time.Now().Unix(),
+	}
 
 	select {
 	case w.writeCh <- msg:
 	default:
 		nlog.Core().Warn("ws write channel full, skipping device report")
+	}
+}
+
+// SendNodeStatus sends a node.status event with the given node_id (machine mode).
+func (w *WSClient) SendNodeStatus(nodeID int, stats map[string]interface{}) {
+	if !w.connected.Load() || stats == nil {
+		return
+	}
+	if nodeID > 0 {
+		stats["node_id"] = nodeID
+	}
+	data, _ := json.Marshal(stats)
+	msg := wsMessage{
+		Event:     "node.status",
+		Data:      data,
+		Timestamp: time.Now().Unix(),
+	}
+	select {
+	case w.writeCh <- msg:
+	default:
+		nlog.Core().Warn("ws write channel full, skipping node status")
 	}
 }
 

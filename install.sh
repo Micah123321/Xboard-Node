@@ -49,7 +49,7 @@ BINARY_URL="${MI_NODE_BINARY_URL:-}"
 
 # 解析后的参数
 PANEL_URL=""
-PANEL_TOKEN=""
+TOKEN=""
 NODE_ID=""
 NODE_TYPE=""
 KERNEL_TYPE="singbox"
@@ -485,6 +485,7 @@ print_supported_shadowsocks_methods() {
 # ─── 参数解析 ────────────────────────────────────────────────────────
 
 parse_args() {
+    local positional=()
     while [ $# -gt 0 ]; do
         case "$1" in
             -a|--api)        PANEL_URL="$2";      shift 2 ;;
@@ -517,17 +518,34 @@ parse_args() {
                 shift
                 ;;
             *)
-                if [ "$SUBCOMMAND" = "remove" ] && [ -z "$NODE_ID" ]; then
-                    NODE_ID="$1"
-                fi
+                positional+=("$1")
                 shift
                 ;;
         esac
     done
 
     case "$KERNEL_TYPE" in
+        singbox|SingBox|SINGBOX) KERNEL_TYPE="singbox" ;;
         xray|Xray|XRAY) KERNEL_TYPE="xray" ;;
-        *) KERNEL_TYPE="singbox" ;;
+        *) ;;
+    esac
+
+    # Auto-detect mode from arguments when --mode is not specified.
+    if [ -z "$MODE" ]; then
+        if [ -n "$MACHINE_ID" ]; then
+            MODE="machine"
+        else
+            MODE="node"
+        fi
+    fi
+
+    case "$MODE" in
+        node|machine) ;;
+        *)
+            log_error "Unsupported mode: $MODE"
+            usage
+            exit 1
+            ;;
     esac
 
     CERT_MODE="$(printf '%s' "$CERT_MODE" | tr '[:upper:]' '[:lower:]')"
@@ -777,11 +795,11 @@ check_root() {
 }
 
 detect_arch() {
-    ARCH=$(uname -m)
-    case "$ARCH" in
+    local raw
+    raw=$(uname -m)
+    case "$raw" in
         x86_64|amd64) ARCH="amd64" ;;
         aarch64|arm64) ARCH="arm64" ;;
-        armv7l) ARCH="armv7" ;;
         *)
             log_error "不支持的架构: $ARCH"
             exit 1
@@ -792,25 +810,56 @@ detect_arch() {
 detect_os() {
     if [ -f /etc/os-release ]; then
         . /etc/os-release
-        OS=$ID
-    elif [ -f /etc/alpine-release ]; then
-        OS="alpine"
+        OS="$ID"
     else
         OS="unknown"
     fi
 }
 
-install_deps() {
+ensure_systemd() {
+    if ! command -v systemctl >/dev/null 2>&1; then
+        log_error "systemd is required for this installer"
+        exit 1
+    fi
+    if [ ! -d /run/systemd/system ]; then
+        log_error "This host does not appear to be running systemd"
+        exit 1
+    fi
+}
+
+run_with_retry() {
+    local attempts="$1"
+    local delay="$2"
+    shift 2
+    local i=1
+    while [ "$i" -le "$attempts" ]; do
+        if "$@"; then
+            return 0
+        fi
+        if [ "$i" -lt "$attempts" ]; then
+            log_warn "Command failed, retrying in ${delay}s: $*"
+            sleep "$delay"
+        fi
+        i=$((i + 1))
+    done
+    return 1
+}
+
+install_dependencies() {
     case "$OS" in
         ubuntu|debian)
-            apt-get update -qq
-            apt-get install -y -qq wget curl tar >/dev/null 2>&1
+            DEBIAN_FRONTEND=noninteractive run_with_retry 10 3 apt-get update -qq
+            DEBIAN_FRONTEND=noninteractive run_with_retry 10 3 apt-get install -y -qq curl wget ca-certificates >/dev/null 2>&1
             ;;
         centos|rhel|rocky|almalinux|fedora)
-            yum install -y -q wget curl tar >/dev/null 2>&1
+            if command -v dnf >/dev/null 2>&1; then
+                run_with_retry 5 3 dnf install -y -q curl wget ca-certificates >/dev/null 2>&1
+            else
+                run_with_retry 5 3 yum install -y -q curl wget ca-certificates >/dev/null 2>&1
+            fi
             ;;
-        alpine)
-            apk add --no-cache wget curl tar >/dev/null 2>&1
+        *)
+            log_warn "OS ${OS} is not in the official support set; continuing best-effort"
             ;;
     esac
 }
@@ -893,6 +942,12 @@ install_binary() {
     elif [ -f "./xboard-node-linux-${ARCH}" ]; then
         src="./xboard-node-linux-${ARCH}"
     fi
+    if [ -f "./xboard-node-linux-${ARCH}" ]; then
+        echo "./xboard-node-linux-${ARCH}"
+        return
+    fi
+    echo ""
+}
 
     if [ -n "$src" ]; then
         cp "$src" "${INSTALL_DIR}/mi-node"
@@ -923,14 +978,46 @@ install_binary() {
 
 # ─── systemd 模板 ───────────────────────────────────────────────────
 
-install_systemd_template() {
-    if ! command -v systemctl >/dev/null 2>&1; then
-        return
+render_config() {
+    local init_args=(
+        config init
+        --mode "$MODE"
+        --panel-url "$PANEL_URL"
+        --kernel "${KERNEL_TYPE:-singbox}"
+        --health-port "${HEALTH_PORT:-0}"
+        --token "$TOKEN"
+        --version "$RELEASE_VERSION"
+        --output "$TMP_DIR/config.yml"
+        --credentials-out "$TMP_DIR/credentials.env"
+        --meta "$TMP_DIR/install-meta.json"
+        --install-root "$INSTALL_ROOT"
+    )
+    if [ -f "$CONFIG_FILE" ]; then
+        init_args+=(--config "$CONFIG_FILE")
+    fi
+    if [ -f "$CREDENTIALS_FILE" ]; then
+        init_args+=(--credentials-in "$CREDENTIALS_FILE")
+    fi
+    if [ "$MODE" = "machine" ]; then
+        init_args+=(--machine-id "$MACHINE_ID")
+    else
+        init_args+=(--node-id "$NODE_ID")
+        if [ -n "$NODE_TYPE" ]; then
+            init_args+=(--node-type "$NODE_TYPE")
+        fi
+    fi
+    if [ -n "$RUNTIME_GOMEMLIMIT" ]; then
+        init_args+=(--gomemlimit "$RUNTIME_GOMEMLIMIT")
+    fi
+    if [ -n "$RUNTIME_GOGC" ] && [ "$RUNTIME_GOGC" -gt 0 ] 2>/dev/null; then
+        init_args+=(--gogc "$RUNTIME_GOGC")
     fi
 
-    if [ -f "/etc/systemd/system/${SERVICE_TEMPLATE}" ]; then
-        return
-    fi
+    local output
+    output=$("$TMP_DIR/xbctl" "${init_args[@]}") || {
+        log_error "xbctl config init failed"
+        exit 1
+    }
 
     log_step "安装 systemd 服务模板..."
 
@@ -946,13 +1033,59 @@ ExecStart=/usr/local/bin/mi-node -c /etc/mi-node/%i/config.yml
 Restart=always
 RestartSec=5
 LimitNOFILE=1048576
+NoNewPrivileges=true
 StandardOutput=journal
 StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-UNIT
+EOF_UNIT
+}
 
+backup_existing_state() {
+    BACKUP_PATH="${BACKUP_DIR}/$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$BACKUP_PATH"
+    if [ -x "$BINARY_PATH" ]; then
+        cp "$BINARY_PATH" "$BACKUP_PATH/xboard-node"
+    fi
+    if [ -x "$CLI_PATH" ]; then
+        cp "$CLI_PATH" "$BACKUP_PATH/xbctl"
+    fi
+    if [ -f "$CONFIG_FILE" ]; then
+        cp "$CONFIG_FILE" "$BACKUP_PATH/config.yml"
+    fi
+    if [ -f "$CREDENTIALS_FILE" ]; then
+        cp "$CREDENTIALS_FILE" "$BACKUP_PATH/credentials.env"
+    fi
+    if [ -f "$INSTALL_META" ]; then
+        cp "$INSTALL_META" "$BACKUP_PATH/install-meta.json"
+    fi
+    if [ -f "$SERVICE_PATH" ]; then
+        cp "$SERVICE_PATH" "$BACKUP_PATH/${SERVICE_NAME}"
+        SERVICE_EXISTED=1
+    else
+        SERVICE_EXISTED=0
+    fi
+}
+
+stop_existing_service() {
+    if [ -f "$SERVICE_PATH" ] || systemctl is-active "$SERVICE_NAME" >/dev/null 2>&1; then
+        systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+    fi
+}
+
+install_staged_files() {
+    stop_existing_service
+    install -m 755 "$TMP_DIR/xboard-node" "$BINARY_PATH"
+    install -m 600 "$TMP_DIR/config.yml" "$CONFIG_FILE"
+    install -m 600 "$TMP_DIR/credentials.env" "$CREDENTIALS_FILE"
+    install -m 644 "$TMP_DIR/install-meta.json" "$INSTALL_META"
+    if [ -f "$0" ] && [ "$(realpath "$0")" != "$(realpath "$INSTALLER_COPY_PATH" 2>/dev/null || echo "$INSTALLER_COPY_PATH")" ]; then
+        install -m 755 "$0" "$INSTALLER_COPY_PATH"
+    fi
+    install -m 755 "$TMP_DIR/xbctl" "$CLI_PATH"
+    ln -sf "$CLI_PATH" /usr/bin/xbctl 2>/dev/null || true
+    install -m 644 "$TMP_DIR/${SERVICE_NAME}" "$SERVICE_PATH"
     systemctl daemon-reload
     log_info "systemd 模板已安装: ${SERVICE_TEMPLATE}"
 }
@@ -1228,9 +1361,57 @@ regenerate_docker_compose() {
         nid=$(basename "$dir")
         nodes+=("$nid")
     done
+    return 1
+}
 
-    if [ ${#nodes[@]} -eq 0 ]; then
-        rm -f "${DOCKER_COMPOSE_FILE}"
+show_recent_logs() {
+    if command -v journalctl >/dev/null 2>&1; then
+        journalctl -u "$SERVICE_NAME" -n 30 --no-pager || true
+    fi
+}
+
+start_service() {
+    if systemctl is-enabled "$SERVICE_NAME" >/dev/null 2>&1; then
+        systemctl restart "$SERVICE_NAME"
+    else
+        systemctl start "$SERVICE_NAME"
+    fi
+    if ! wait_for_health; then
+        log_error "Service failed health check"
+        show_recent_logs
+        return 1
+    fi
+}
+
+perform_install() {
+    validate_install_request
+    detect_current_state
+    require_reconfigure_confirmation
+    TMP_DIR=$(mktemp -d)
+    ensure_dirs
+    stage_binary
+    stage_xbctl
+    render_config
+    render_service
+    backup_existing_state
+    install_staged_files
+    start_service
+
+    log_info "Installation succeeded"
+    log_info "Service: ${SERVICE_NAME}"
+    log_info "Config: ${CONFIG_FILE}"
+    log_info "Credentials: ${CREDENTIALS_FILE}"
+    if [ "$HEALTH_ENABLED" -eq 1 ]; then
+        log_info "Health: http://127.0.0.1:${HEALTH_PORT}/healthz"
+    fi
+    log_info "CLI: ${CLI_PATH}  (run '${CLI_PATH} list' if xbctl is not in PATH)"
+}
+
+perform_upgrade() {
+    detect_current_state
+    if [ "$CURRENT_STATE" = "fresh" ]; then
+        log_warn "No existing install found; falling back to install"
+        perform_install
         return
     fi
 
@@ -1272,11 +1453,11 @@ deploy_node() {
     else
         prompt_missing_params
     fi
-
-    if [ "$DOCKER_MODE" -eq 1 ]; then
-        add_node_docker "$NODE_ID"
-    else
-        add_node_native "$NODE_ID"
+    echo
+    read -r -p "Proceed with uninstall? [y/N]: " answer
+    if ! [[ "$answer" =~ ^[Yy]$ ]]; then
+        log_warn "Uninstall cancelled"
+        exit 0
     fi
 
     if has_cert_inputs && is_acme_mode; then
@@ -1659,40 +1840,33 @@ HELP
 
 main() {
     parse_args "$@"
+    case "$ACTION" in
+        help)
+            usage
+            exit 0
+            ;;
+        status)
+            ensure_systemd
+            perform_status
+            exit 0
+            ;;
+    esac
 
-    case "$SUBCOMMAND" in
-        remove)
-            check_root
-            remove_node "$NODE_ID"
+    check_root
+    detect_arch
+    detect_os
+    ensure_systemd
+    install_dependencies
+
+    case "$ACTION" in
+        install)
+            perform_install
             ;;
-        list)
-            list_nodes
-            ;;
-        update)
-            check_root
-            update_binary
+        upgrade)
+            perform_upgrade
             ;;
         uninstall)
-            check_root
-            do_uninstall
-            ;;
-        help|--help|-h)
-            print_help
-            ;;
-        add|"")
-            check_root
-            detect_arch
-            detect_os
-            install_deps
-            mkdir -p "$CONFIG_DIR"
-            migrate_legacy_config
-
-            if [ "$DOCKER_MODE" -eq 0 ]; then
-                install_binary
-                install_systemd_template
-            fi
-
-            deploy_node
+            perform_uninstall
             ;;
         *)
             log_error "未知命令: $SUBCOMMAND"
