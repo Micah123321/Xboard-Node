@@ -46,10 +46,18 @@
 
 ## Application Order
 
-1. Structured `custom_route_rules` (highest priority)
-2. Raw `custom_routes`
-3. Built-in blocklist rules
+When `kernel.egress.enable_default_rules` is enabled (the default), both
+sing-box and Xray generate routes in this order:
+
+1. Built-in protection rules: private IP ranges, BitTorrent and the maintained domain blocklist
+2. Structured `custom_route_rules`
+3. Raw `custom_routes`
 4. Panel routes
+5. Final default outbound (`direct`, `default-socks5`, or `default-shadowsocks`)
+
+When `enable_default_rules` is disabled, the maintained protection list is
+removed, but a small historical private-network block is still inserted after
+custom routes and before panel routes.
 
 ## Kernel Compatibility
 

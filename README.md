@@ -16,21 +16,22 @@ Mi Node 的专用节点后端，完整兼容 Mi API，支持 sing-box 与 Xray �
 ### 当前支持的协议
 
 - `sing-box`（默认）: `vmess`、`vless`、`trojan`、`shadowsocks`、`hysteria`（Version=2 时生成 `hysteria2`）、`tuic`、`naive`、`socks`、`http`、`anytls`、`mieru`
-- `xray`: `vmess`、`vless`、`trojan`、`shadowsocks`、`socks`、`http`、`dokodemo-door`
+- `xray`: `vmess`、`vless`、`trojan`、`shadowsocks`、`socks`、`http`、`hysteria`（仅 v2）
 - 两套内核共同支持: `vmess`、`vless`、`trojan`、`shadowsocks`、`socks`、`http`
 - `sing-box` 专属: `hysteria` / `hysteria2`、`tuic`、`naive`、`anytls`、`mieru`
-- `xray` 专属: `dokodemo-door`
+- `xray` 专属: 无；`hysteria` 在 xray 下仅支持 v2
 
 ## 推荐部署方式：本机直接部署
 
-如果你希望避免 Docker 带来的额外内存占用，推荐直接通过远程安装脚本进行原生部署。当前仓库远程地址为 `https://github.com/Micah123321/mi-node.git`，一键命令统一从 `dev` 分支的 Raw 脚本拉取并执行；推送到当前仓库 `dev` 分支后，GitHub Actions 会自动更新当前仓库的 Release，`install.sh` 的安装和 `update` 也会默认跟随这里的最新产物。
+如果你希望避免 Docker 带来的额外内存占用，推荐直接通过远程安装脚本进行原生部署。当前仓库远程地址为 `https://github.com/Micah123321/mi-node.git`，一键命令统一从 `dev` 分支的 Raw 脚本拉取并执行；推送到当前仓库 `dev` 分支后，GitHub Actions 会自动更新当前仓库的 Release，`install.sh upgrade` 会默认跟随这里的最新 `mi-node-linux-*` 和 `xbctl-linux-*` 产物。
 
 ### 适用环境
 
 - Linux 服务器
 - 已安装 `bash`
+- 使用 systemd
 - 建议以 `root` 或 `sudo` 执行
-- 支持 Ubuntu 20+、Debian 11+、CentOS 8+、Alpine 3.18+
+- 支持 Ubuntu 20+、Debian 11+、CentOS/Rocky/AlmaLinux 8+ 等 systemd 发行版
 
 ### 一键部署单节点
 
@@ -93,8 +94,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/hea
   --cert-dns-env CF_API_TOKEN=YOUR_TOKEN
 ```
 
-- 部署完成后，安装脚本会先等待最多约 15 秒再输出“证书申请状态”：检测到 `/etc/mi-node/<node_id>/certs/<domain>.crt/.key` 即表示申请成功；否则会提示你查看服务日志继续排查。
-- 当前内置支持 `cloudflare` 和 `alidns`
+- 部署完成后，服务首次拉取面板节点配置时会按 `cert` 配置申请或生成证书；默认路径为 `/etc/mi-node/certs/<domain>.crt/.key`。
+- DNS provider 与环境变量完整列表见 [docs-dns-providers.md](docs-dns-providers.md)
 - DNS-01 适合被 CDN 代理、无法开放 `80` 端口，或需要通配符证书的场景
 
 ### 默认 SOCKS5 出站
@@ -146,18 +147,21 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/hea
 - 如果你更需要接入 `ss` / `ss2022` 落地节点，也可以改用 `kernel.egress.shadowsocks`；默认路由行为与 `socks5` 保持一致，但两者只能二选一
 - `install.sh` 现在使用单个 `--egress-shadowsocks-uri 'ss://...'` 参数写入默认 SS 出站
 - `kernel.egress.shadowsocks` 现在只接受 `uri`；旧的 `address / port / method / password` 写法会在加载配置时直接报错
-- `aes-192-gcm` 仅建议在 `singbox` 内核下使用；当前安装脚本会拦截 `xray + aes-192-gcm` 组合，避免写入后启动失败
-- 当你使用 `singbox + --egress-shadowsocks-uri` 时，安装脚本会在服务启动后等待默认出站真实 probe；如果日志明确出现 `shadowsocks egress probe failed`，部署会直接判失败并保留现场供排查
+- `aes-192-gcm` 仅建议在 `singbox` 内核下使用；`xray` 下请使用 `aes-128-gcm`、`aes-256-gcm` 或 `chacha20-ietf-poly1305`
+- 当你使用 `singbox + --egress-shadowsocks-uri` 时，服务运行日志会记录默认出站真实 probe 结果；可通过 `journalctl -u mi-node -f` 或调试端口排查
 - 如果未配置 SOCKS5，默认出站仍然是直连，但默认拦截规则依然会照常生效
-- 安装脚本生成的 `config.yml` 会默认写出 `kernel.egress.enable_default_rules: true` 和 `kernel.egress.prefer_ipv4: true`，你可以直接在本地改这两个开关
+- 传入默认出站参数时，安装脚本会写出 `kernel.egress.enable_default_rules: true` 和 `kernel.egress.prefer_ipv4: true`；未写出时这两个开关仍按代码默认值 `true` 生效
 
 ### 常用管理命令
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/install.sh) list
-bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/install.sh) remove 1
-bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/install.sh) update
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/install.sh) status
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/install.sh) upgrade
 bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/install.sh) uninstall
+
+xbctl status
+xbctl list
+xbctl service logs
 ```
 
 ### 旧 Xboard-Node 批量迁移到 mi-node
@@ -188,9 +192,9 @@ ssh root@YOUR_HOST "bash <(curl -fsSL https://raw.githubusercontent.com/Micah123
 原生部署完成后可使用：
 
 ```bash
-systemctl status mi-node@1
-journalctl -u mi-node@1 -f
-systemctl restart mi-node@1
+systemctl status mi-node
+journalctl -u mi-node -f
+systemctl restart mi-node
 ```
 
 ## 本地 SS 出站调试端口
@@ -232,6 +236,7 @@ docker run -d --restart=always --network=host \
 
 ```bash
 make build
+make build-xbctl
 ```
 
 ### 构建 Linux 版本
@@ -240,6 +245,8 @@ make build
 make build-linux
 make build-linux-arm64
 ```
+
+`make build-linux` 与 `make build-linux-arm64` 会同时生成 `mi-node-linux-*` 和 `xbctl-linux-*`，Release 会发布这两类产物。
 
 ### 运行测试
 
@@ -280,7 +287,29 @@ runtime:
 
 - `gomemlimit` 建议从机器可用内存的 60% 到 80% 开始尝试
 - `gogc` 越低，内存越省，但 CPU 消耗会更高
-- 多节点部署时建议为每个节点单独设置 `config_dir`
+- 多实例部署建议使用 `instances:`，每个实例设置独立 `kernel.config_dir`
+
+多实例与 machine mode 示例：
+
+```yaml
+instances:
+  - panel:
+      url: "https://panel-a.example.com"
+      token_env: "PANEL_A_TOKEN"
+      node_id: 1
+    kernel:
+      type: "singbox"
+      config_dir: "/etc/mi-node/instances/panel-a-node-1"
+
+  - panel:
+      url: "https://panel-b.example.com"
+    machine:
+      machine_id: 100
+      token_env: "PANEL_B_MACHINE_TOKEN"
+    kernel:
+      type: "xray"
+      config_dir: "/etc/mi-node/instances/panel-b-machine-100"
+```
 
 如果需要默认经 SOCKS5 出站，可以增加：
 

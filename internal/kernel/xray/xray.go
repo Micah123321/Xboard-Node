@@ -98,7 +98,7 @@ func (x *Xray) Capabilities() kernel.Capabilities {
 func (x *Xray) Protocols() []string {
 	return []string{
 		"vmess", "vless", "trojan", "shadowsocks",
-		"hysteria",
+		"socks", "http", "hysteria",
 	}
 }
 

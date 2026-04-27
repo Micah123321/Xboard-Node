@@ -1,19 +1,20 @@
 # DNS Providers
 
-Used by `cert_config.cert_mode: "dns"` for ACME DNS-01.
+Used by `cert.cert_mode: "dns"` for ACME DNS-01. The installer writes these
+values from repeated `--cert-dns-env KEY=VALUE` arguments into `cert.dns_env`.
 
 ```yaml
-cert_config:
+cert:
   cert_mode: "dns"
   dns_provider: "cloudflare"
   dns_env:
-    CLOUDFLARE_DNS_API_TOKEN: "xxx"
+    CF_API_TOKEN: "xxx"
 ```
 
 | provider | aliases | env |
 |---|---|---|
-| cloudflare | cf | `CLOUDFLARE_DNS_API_TOKEN` |
-| alidns | aliyun | `ALICLOUD_ACCESS_KEY_ID`, `ALICLOUD_ACCESS_KEY_SECRET` |
+| cloudflare | cf | `CLOUDFLARE_DNS_API_TOKEN`, `CF_API_TOKEN`, `CLOUDFLARE_API_TOKEN` |
+| alidns | aliyun | `ALICLOUD_ACCESS_KEY_ID`, `ALICLOUD_ACCESS_KEY_SECRET` (also accepts `ALI_ACCESS_KEY_*`, `ALIYUN_ACCESS_KEY_*`) |
 | tencentcloud | tencent | `TENCENTCLOUD_SECRET_ID`, `TENCENTCLOUD_SECRET_KEY` |
 | route53 | aws | AWS credential chain (env / IAM role / profile) |
 | godaddy | | `GODADDY_API_KEY`, `GODADDY_API_SECRET` |

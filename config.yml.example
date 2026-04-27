@@ -78,7 +78,7 @@ cert:
 
   # ── DNS-01 模式 ──
   # cert_mode: "dns"
-  # dns_provider: "cloudflare"   # 支持: cloudflare, alidns
+  # dns_provider: "cloudflare"   # 完整 provider/环境变量列表见 docs-dns-providers.md
   # dns_env:                     # 提供商所需凭据
   #   CF_API_TOKEN: "your-cloudflare-api-token"
   # 适合被 CDN 代理、80 端口不可用，或需要通配符证书的场景
@@ -107,9 +107,35 @@ runtime:
   gogc: 0
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 高级 / 多节点模式
+# 多实例 / machine mode（可选）
+# 原生安装脚本和 xbctl 会写入 instances:，每个实例可以有独立 panel、kernel、
+# runtime、cert、health_port 和 config_dir。token 建议放在 credentials.env，
+# 配置中只保留 token_env。
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# instances:
+#   - panel:
+#       url: "https://panel-a.example.com"
+#       token_env: "PANEL_A_TOKEN"
+#       node_id: 1
+#     kernel:
+#       type: "singbox"
+#       config_dir: "/etc/mi-node/instances/panel-a-node-1"
+#     health_port: 65530
+#
+#   - panel:
+#       url: "https://panel-b.example.com"
+#     machine:
+#       machine_id: 100
+#       token_env: "PANEL_B_MACHINE_TOKEN"
+#     kernel:
+#       type: "xray"
+#       config_dir: "/etc/mi-node/instances/panel-b-machine-100"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 高级 / legacy nodes 模式
 # 使用一份配置文件运行多个节点，每个节点拥有独立工作目录。
-# 注意: 多节点模式下 `kernel.type` 为全局共享，不支持按节点分别切换 singbox/xray。
+# 注意: nodes: 模式下 `kernel.type` 为全局共享；如需按实例切换内核，请使用上方 instances:。
 # ══════════════════════════════════════════════════════════════════════════════
 # 当存在 `nodes:` 时，顶层 `panel.node_id` 会被忽略。
 #

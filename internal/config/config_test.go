@@ -766,7 +766,6 @@ kernel:
 	}
 }
 
-
 func TestLoadRoot_LegacyConfigNormalizesToSingleInstance(t *testing.T) {
 	path := writeTemp(t, `
 panel:
@@ -836,7 +835,7 @@ instances:
 
 func TestConfig_AutoInstanceIDStable(t *testing.T) {
 	cfg := &Config{Panel: PanelConfig{URL: "https://Panel.Example.com/", NodeID: 1, Token: "tok"}}
-	cfg.setDefaultsFrom("/etc/xboard-node")
+	cfg.setDefaultsFrom("/etc/mi-node")
 	id1, err := cfg.AutoInstanceID()
 	if err != nil {
 		t.Fatalf("AutoInstanceID: %v", err)

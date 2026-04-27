@@ -2,6 +2,7 @@
 
 | 时间戳 | 名称 | 类型 | 涉及模块 | 决策 | 结果 |
 |--------|------|------|----------|------|------|
+| 202604280026 | fix-merge-deployment-consistency | - | - | - | ✅完成 |
 | 202604161713 | repo-folder-rename-to-mi-node | - | - | - | ✅完成 |
 | 202604161651 | mi-full-rename | - | - | - | ✅完成 |
 | 202604152142 | install-http01-preflight | implementation | install, docs, config | install-http01-preflight#D001 不伪造任意公网端口 HTTP-01，改为增强预检与提示 | ✅完成 |

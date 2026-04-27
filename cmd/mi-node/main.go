@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -17,6 +16,8 @@ import (
 	"time"
 
 	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/machine"
+	"github.com/micah123321/mi-node/internal/nlog"
 	"github.com/micah123321/mi-node/internal/service"
 )
 
@@ -81,7 +82,7 @@ func newDebugMux(statuses func() []service.EgressDebugStatus) *http.ServeMux {
 		}
 
 		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			slog.Warn("failed to write debug response", "error", err)
+			nlog.Core().Warn("failed to write debug response", "error", err)
 		}
 	})
 	return mux
@@ -97,21 +98,29 @@ func main() {
 		os.Exit(0)
 	}
 
-	cfg, err := config.Load(*configPath)
+	rootCfg, err := config.LoadRoot(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
 		os.Exit(1)
 	}
 
-	config.InitLogger(cfg.Log)
+	instances, err := rootCfg.NormalizeInstances()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to normalize config: %v\n", err)
+		os.Exit(1)
+	}
+	if len(instances) == 0 {
+		fmt.Fprintln(os.Stderr, "no runnable instances configured")
+		os.Exit(1)
+	}
 
-	// Apply runtime memory tuning before anything else allocates.
-	applyRuntimeConfig(cfg.Runtime)
+	config.InitLogger(instances[0].Log)
+	applyRuntimeConfig(instances[0].Runtime)
 
-	runWithReload(cfg, *configPath)
+	runWithReload(rootCfg, *configPath)
 }
 
-func runWithReload(initialCfg *config.Config, configPath string) {
+func runWithReload(initialRoot *config.RootConfig, configPath string) {
 	var healthSrv *http.Server
 	var healthPort int
 	var debugSrv *http.Server
@@ -125,15 +134,15 @@ func runWithReload(initialCfg *config.Config, configPath string) {
 		}
 		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 		if err != nil {
-			slog.Error("failed to start health check listener", "port", port, "error", err)
+			nlog.Core().Error("failed to start health check listener", "port", port, "error", err)
 			os.Exit(1)
 		}
 		healthSrv = &http.Server{Handler: newHealthMux(), ReadHeaderTimeout: 5 * time.Second}
 		healthPort = port
 		go func() {
-			slog.Info("health check listening", "addr", ln.Addr())
+			nlog.Core().Info("health check listening", "addr", ln.Addr())
 			if err := healthSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
-				slog.Warn("health check server stopped", "error", err)
+				nlog.Core().Warn("health check server stopped", "error", err)
 			}
 		}()
 	}
@@ -145,15 +154,15 @@ func runWithReload(initialCfg *config.Config, configPath string) {
 		}
 		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 		if err != nil {
-			slog.Error("failed to start local debug listener", "port", port, "error", err)
+			nlog.Core().Error("failed to start local debug listener", "port", port, "error", err)
 			os.Exit(1)
 		}
 		debugSrv = &http.Server{Handler: newDebugMux(registry.SnapshotDebugStatuses), ReadHeaderTimeout: 5 * time.Second}
 		debugPort = port
 		go func() {
-			slog.Info("local debug listening", "addr", ln.Addr())
+			nlog.Core().Info("local debug listening", "addr", ln.Addr())
 			if err := debugSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
-				slog.Warn("local debug server stopped", "error", err)
+				nlog.Core().Warn("local debug server stopped", "error", err)
 			}
 		}()
 	}
@@ -177,34 +186,47 @@ func runWithReload(initialCfg *config.Config, configPath string) {
 	defer closeHealth()
 	defer closeDebug()
 
-	for cfg := initialCfg; ; {
-		if cfg.HealthPort != healthPort {
-			closeHealth()
-			startHealth(cfg.HealthPort)
+	for root := initialRoot; ; {
+		instances, err := root.NormalizeInstances()
+		if err != nil {
+			nlog.Core().Error("failed to normalize config", "error", err)
+			os.Exit(1)
 		}
-		if cfg.DebugPort != debugPort {
-			closeDebug()
-			startDebug(cfg.DebugPort)
+		if len(instances) == 0 {
+			nlog.Core().Error("no runnable instances configured")
+			os.Exit(1)
+		}
+		if err := config.ValidateStartupLayout(instances); err != nil {
+			nlog.Core().Error("startup layout validation failed", "error", err)
+			os.Exit(1)
 		}
 
-		nodes := cfg.ExpandNodes()
-		slog.Info("mi-node starting",
+		if instances[0].HealthPort != healthPort {
+			closeHealth()
+			startHealth(instances[0].HealthPort)
+		}
+		if instances[0].DebugPort != debugPort {
+			closeDebug()
+			startDebug(instances[0].DebugPort)
+		}
+
+		nlog.Core().Info("mi-node starting",
 			"version", version,
 			"build_time", buildTime,
-			"nodes", len(nodes),
+			"instances", len(instances),
 		)
 
 		ctx, cancel := context.WithCancel(context.Background())
-		reloadCh := make(chan *config.Config, 1)
+		reloadCh := make(chan *config.RootConfig, 1)
 
-		watcher, err := config.WatchConfig(ctx, configPath, func(newCfg *config.Config) {
+		watcher, err := config.WatchConfigRoot(ctx, configPath, func(newRoot *config.RootConfig) {
 			select {
-			case reloadCh <- newCfg:
+			case reloadCh <- newRoot:
 			default:
 			}
 		})
 		if err != nil {
-			slog.Warn("config watcher unavailable, hot-reload disabled", "error", err)
+			nlog.Core().Warn("config watcher unavailable, hot-reload disabled", "error", err)
 		}
 
 		sigCh := make(chan os.Signal, 1)
@@ -213,40 +235,101 @@ func runWithReload(initialCfg *config.Config, configPath string) {
 		go func() {
 			select {
 			case sig := <-sigCh:
-				slog.Info("received signal, shutting down gracefully", "signal", sig)
+				nlog.Core().Info("received signal, shutting down gracefully", "signal", sig)
 				cancel()
 
 				select {
 				case sig = <-sigCh:
-					slog.Warn("received second signal, forcing exit", "signal", sig)
+					nlog.Core().Warn("received second signal, forcing exit", "signal", sig)
 					os.Exit(1)
 				case <-time.After(15 * time.Second):
-					slog.Error("shutdown timed out after 15s, forcing exit")
+					nlog.Core().Error("shutdown timed out after 15s, forcing exit")
 					os.Exit(2)
 				}
 			case <-ctx.Done():
 			}
 		}()
 
-		errCh := make(chan error, len(nodes))
+		errCh := make(chan error, len(instances))
 		var wg sync.WaitGroup
-		services := make([]*service.Service, 0, len(nodes))
-		for _, nodeCfg := range nodes {
-			nodeCfg := nodeCfg
-			svc := service.New(nodeCfg)
-			services = append(services, svc)
-			wg.Add(1)
-			go func(svc *service.Service) {
-				defer wg.Done()
-				if err := svc.Run(ctx); err != nil {
-					slog.Error("node service exited with error",
-						"node_id", nodeCfg.Panel.NodeID, "error", err)
-					errCh <- err
-					cancel()
-				} else {
-					slog.Info("node service stopped", "node_id", nodeCfg.Panel.NodeID)
+		services := make([]*service.Service, 0, len(instances))
+
+		for _, instanceCfg := range instances {
+			instanceCfg := instanceCfg
+			var nodeServices []*service.Service
+			if !instanceCfg.IsMachineMode() {
+				nodes := instanceCfg.ExpandNodes()
+				nodeServices = make([]*service.Service, 0, len(nodes))
+				for _, nodeCfg := range nodes {
+					svc := service.New(nodeCfg)
+					nodeServices = append(nodeServices, svc)
+					services = append(services, svc)
 				}
-			}(svc)
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if instanceCfg.IsMachineMode() {
+					nlog.Core().Info("starting machine instance",
+						"instance", instanceCfg.InstanceID,
+						"machine_id", instanceCfg.Machine.MachineID,
+						"panel_url", instanceCfg.Panel.URL,
+					)
+					orch := machine.New(instanceCfg)
+					if err := orch.Run(ctx); err != nil {
+						nlog.Core().Error("machine instance exited with error",
+							"instance", instanceCfg.InstanceID,
+							"error", err,
+						)
+						errCh <- err
+						cancel()
+					}
+					return
+				}
+
+				nodes := instanceCfg.ExpandNodes()
+				nlog.Core().Info("starting node instance",
+					"instance", instanceCfg.InstanceID,
+					"nodes", len(nodes),
+					"panel_url", instanceCfg.Panel.URL,
+				)
+
+				var instanceWG sync.WaitGroup
+				for idx, nodeCfg := range nodes {
+					nodeCfg := nodeCfg
+					svc := nodeServices[idx]
+					instanceWG.Add(1)
+					go func(idx int, svc *service.Service) {
+						defer instanceWG.Done()
+						if idx > 0 {
+							delay := time.Duration(idx) * 250 * time.Millisecond
+							if delay > 2*time.Second {
+								delay = 2 * time.Second
+							}
+							select {
+							case <-time.After(delay):
+							case <-ctx.Done():
+								return
+							}
+						}
+						if err := svc.Run(ctx); err != nil {
+							nlog.Core().Error("node service exited with error",
+								"instance", nodeCfg.InstanceID,
+								"node_id", nodeCfg.Panel.NodeID,
+								"error", err,
+							)
+							errCh <- err
+							cancel()
+						} else {
+							nlog.Core().Info("node service stopped",
+								"instance", nodeCfg.InstanceID,
+								"node_id", nodeCfg.Panel.NodeID,
+							)
+						}
+					}(idx, svc)
+				}
+				instanceWG.Wait()
+			}()
 		}
 		registry.Set(services)
 
@@ -256,10 +339,10 @@ func runWithReload(initialCfg *config.Config, configPath string) {
 			close(doneCh)
 		}()
 
-		var newCfg *config.Config
+		var newRoot *config.RootConfig
 		select {
-		case newCfg = <-reloadCh:
-			slog.Info("config changed, restarting services")
+		case newRoot = <-reloadCh:
+			nlog.Core().Info("config changed, restarting services")
 			cancel()
 			<-doneCh
 		case <-doneCh:
@@ -271,19 +354,28 @@ func runWithReload(initialCfg *config.Config, configPath string) {
 		}
 		cancel()
 
-		if newCfg == nil {
+		if newRoot == nil {
 			close(errCh)
 			if err := firstError(errCh); err != nil {
 				os.Exit(1)
 			}
-			slog.Info("mi-node stopped")
+			nlog.Core().Info("mi-node stopped")
 			return
 		}
 
-		config.InitLogger(newCfg.Log)
-		applyRuntimeConfig(newCfg.Runtime)
-		cfg = newCfg
-		slog.Info("reload complete, services restarting with new config")
+		newInstances, err := newRoot.NormalizeInstances()
+		if err != nil {
+			nlog.Core().Error("failed to normalize reloaded config", "error", err)
+			os.Exit(1)
+		}
+		if len(newInstances) == 0 {
+			nlog.Core().Error("no runnable instances configured after reload")
+			os.Exit(1)
+		}
+		config.InitLogger(newInstances[0].Log)
+		applyRuntimeConfig(newInstances[0].Runtime)
+		root = newRoot
+		nlog.Core().Info("reload complete, services restarting with new config")
 	}
 }
 
@@ -298,24 +390,20 @@ func firstError(errCh <-chan error) error {
 
 // applyRuntimeConfig wires up Go runtime memory limits from the config file.
 // Both settings can also be overridden by environment variables (GOMEMLIMIT /
-// GOGC) — the env vars take precedence because Go's runtime reads them before
-// we can call these functions, but we set them here for completeness and so
-// the values are logged.
+// GOGC) before startup; this function applies config-file values at runtime.
 func applyRuntimeConfig(rt config.RuntimeConfig) {
-	// GOGC
 	if rt.GoGCPercent > 0 {
 		prev := debug.SetGCPercent(rt.GoGCPercent)
-		slog.Info("runtime: GOGC set", "gogc", rt.GoGCPercent, "prev", prev)
+		nlog.Core().Info("runtime: GOGC set", "gogc", rt.GoGCPercent, "prev", prev)
 	}
 
-	// GOMEMLIMIT — parse human-readable size string (e.g. "30MiB")
 	if rt.GoMemLimit != "" {
 		limit, err := parseMemLimit(rt.GoMemLimit)
 		if err != nil {
-			slog.Warn("runtime: invalid gomemlimit, ignoring", "value", rt.GoMemLimit, "error", err)
+			nlog.Core().Warn("runtime: invalid gomemlimit, ignoring", "value", rt.GoMemLimit, "error", err)
 		} else {
 			prev := debug.SetMemoryLimit(limit)
-			slog.Info("runtime: GOMEMLIMIT set",
+			nlog.Core().Info("runtime: GOMEMLIMIT set",
 				"limit", rt.GoMemLimit,
 				"bytes", limit,
 				"prev_bytes", prev,
@@ -350,7 +438,6 @@ func parseMemLimit(s string) (int64, error) {
 			return n * sf.mult, nil
 		}
 	}
-	// No suffix: treat as raw bytes.
 	var n int64
 	if _, err := fmt.Sscanf(s, "%d", &n); err != nil {
 		return 0, fmt.Errorf("unrecognised size format %q", s)

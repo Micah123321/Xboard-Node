@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-04-28
+
+### 修复
+
+- **[merge/deploy/config]**: 完整收口 `cedar2025/dev` 合并后的部署一致性问题：`cmd/mi-node` 接入 `RootConfig`/`instances`/machine mode，`install.sh` 收敛为 `mi-node.service` 原生安装器，`xbctl` 与 CI artifact 统一到 `mi-node`/`xbctl`，xray 协议声明补齐 `socks`/`http` 并移除错误文档声明，配置示例与 DNS/custom route 文档同步到代码事实。 — by yinjianm
+  - 方案: [202604280026_fix-merge-deployment-consistency](archive/2026-04/202604280026_fix-merge-deployment-consistency/)
+  - 决策: fix-merge-deployment-consistency#D001(以 mi-node 单轨承接 upstream 新能力)
+
 ### 快速修复
 
 - **[repo/docs/kb]**: GitHub 发布源仓库已从旧仓名切换到 `Micah123321/mi-node`，`origin`、README Raw 地址、`install.sh` 默认发布源和 `.helloagents` 当前态路径说明已同步更新；本地工作目录已切换到 `E:\code\go\mi-node`。 — by yinjianm

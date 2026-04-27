@@ -22,14 +22,14 @@ import (
 )
 
 const (
-	defaultConfigPath      = "/etc/xboard-node/config.yml"
-	defaultMetaPath        = "/etc/xboard-node/install-meta.json"
-	defaultCredentialsPath = "/etc/xboard-node/credentials.env"
-	defaultBinaryPath      = "/usr/local/bin/xboard-node"
+	defaultConfigPath      = "/etc/mi-node/config.yml"
+	defaultMetaPath        = "/etc/mi-node/install-meta.json"
+	defaultCredentialsPath = "/etc/mi-node/credentials.env"
+	defaultBinaryPath      = "/usr/local/bin/mi-node"
 	defaultCLIPath         = "/usr/local/bin/xbctl"
-	serviceName            = "xboard-node.service"
-	serviceFilePath        = "/etc/systemd/system/xboard-node.service"
-	defaultInstallRoot     = "/etc/xboard-node"
+	serviceName            = "mi-node.service"
+	serviceFilePath        = "/etc/systemd/system/mi-node.service"
+	defaultInstallRoot     = "/etc/mi-node"
 	downloadBase           = "https://github.com/micah123321/mi-node/releases"
 )
 
@@ -92,13 +92,14 @@ type fileNodeConfig struct {
 }
 
 type fileKernelConfig struct {
-	Type         string           `yaml:"type"`
-	ConfigDir    string           `yaml:"config_dir"`
-	LogLevel     string           `yaml:"log_level,omitempty"`
-	GeoDataDir   string           `yaml:"geo_data_dir,omitempty"`
-	CustomConfig string           `yaml:"custom_config,omitempty"`
-	CustomRoute  []map[string]any `yaml:"custom_route,omitempty"`
-	CustomOut    []map[string]any `yaml:"custom_outbound,omitempty"`
+	Type         string               `yaml:"type"`
+	ConfigDir    string               `yaml:"config_dir"`
+	LogLevel     string               `yaml:"log_level,omitempty"`
+	Egress       *config.EgressConfig `yaml:"egress,omitempty"`
+	GeoDataDir   string               `yaml:"geo_data_dir,omitempty"`
+	CustomConfig string               `yaml:"custom_config,omitempty"`
+	CustomRoute  []map[string]any     `yaml:"custom_route,omitempty"`
+	CustomOut    []map[string]any     `yaml:"custom_outbound,omitempty"`
 }
 
 type fileLogConfig struct {
@@ -225,7 +226,7 @@ shortcuts:
 }
 
 func runStatus() error {
-	fmt.Println("xboard-node status")
+	fmt.Println("mi-node status")
 	fmt.Println()
 
 	// Version from install-meta.json
@@ -403,10 +404,10 @@ func runUpgrade(args []string) error {
 
 	binaryDir := filepath.Dir(defaultBinaryPath)
 	cliDir := filepath.Dir(defaultCLIPath)
-	newBinary := filepath.Join(binaryDir, ".xboard-node.new")
+	newBinary := filepath.Join(binaryDir, ".mi-node.new")
 	newCLI := filepath.Join(cliDir, ".xbctl.new")
 
-	binaryURL := resolveDownloadURL(fmt.Sprintf("xboard-node-linux-%s", arch), version)
+	binaryURL := resolveDownloadURL(fmt.Sprintf("mi-node-linux-%s", arch), version)
 	cliURL := resolveDownloadURL(fmt.Sprintf("xbctl-linux-%s", arch), version)
 
 	fmt.Printf("Downloading %s...\n", binaryURL)
@@ -849,8 +850,8 @@ func writeRootConfig(path string, root *config.RootConfig) error {
 	if p.Log.Level != "" || p.Log.Output != "" {
 		out.Log = &fileLogConfig{Level: p.Log.Level, Output: p.Log.Output}
 	}
-	if p.Kernel.Type != "" || p.Kernel.LogLevel != "" {
-		out.Kernel = &fileKernelConfig{Type: p.Kernel.Type, LogLevel: p.Kernel.LogLevel}
+	if p.Kernel.Type != "" || p.Kernel.LogLevel != "" || hasEgressConfig(p.Kernel.Egress) {
+		out.Kernel = &fileKernelConfig{Type: p.Kernel.Type, LogLevel: p.Kernel.LogLevel, Egress: egressConfigPtr(p.Kernel.Egress)}
 	}
 	if p.Node.PushInterval != 0 || p.Node.PullInterval != 0 || p.Node.TrackInterval != 0 || p.Node.DeviceReportInterval != 0 {
 		out.Node = &fileNodeConfig{
@@ -883,6 +884,7 @@ func writeRootConfig(path string, root *config.RootConfig) error {
 				Type:         inst.Kernel.Type,
 				ConfigDir:    inst.Kernel.ConfigDir,
 				LogLevel:     inst.Kernel.LogLevel,
+				Egress:       egressConfigPtr(inst.Kernel.Egress),
 				GeoDataDir:   inst.Kernel.GeoDataDir,
 				CustomConfig: inst.Kernel.CustomConfig,
 				CustomRoute:  inst.Kernel.CustomRoute,
@@ -932,6 +934,23 @@ func writeRootConfig(path string, root *config.RootConfig) error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 	return os.WriteFile(path, data, 0o600)
+}
+
+func egressConfigPtr(egress config.EgressConfig) *config.EgressConfig {
+	if !hasEgressConfig(egress) {
+		return nil
+	}
+	return &egress
+}
+
+func hasEgressConfig(egress config.EgressConfig) bool {
+	return egress.EnableDefaultRules != nil ||
+		egress.PreferIPv4 != nil ||
+		egress.SOCKS5.Address != "" ||
+		egress.SOCKS5.Port != 0 ||
+		egress.SOCKS5.Username != "" ||
+		egress.SOCKS5.Password != "" ||
+		egress.Shadowsocks.URI != ""
 }
 
 func pruneCredentialKeys(path string, removed []config.Config) error {
@@ -1156,7 +1175,7 @@ func latestInstanceID(instances []*config.Config) string {
 
 func regenerateServiceFile() error {
 	unit := fmt.Sprintf(`[Unit]
-Description=Xboard Node Backend
+Description=Mi Node Backend
 Documentation=https://github.com/micah123321/mi-node
 After=network-online.target
 Wants=network-online.target
@@ -1348,7 +1367,7 @@ func runConfigInit(args []string) error {
 	inst.InstanceID = instanceID
 
 	if installRoot == "" {
-		installRoot = "/etc/xboard-node"
+		installRoot = "/etc/mi-node"
 	}
 	inst.Kernel.ConfigDir = filepath.Join(installRoot, "instances", instanceID)
 

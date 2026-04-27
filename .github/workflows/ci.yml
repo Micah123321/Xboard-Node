@@ -57,7 +57,7 @@ jobs:
             make build-linux-arm64
           fi
 
-      - name: Upload xboard-node artifact
+      - name: Upload mi-node artifact
         uses: actions/upload-artifact@v4
         with:
           name: mi-node-${{ matrix.goos }}-${{ matrix.goarch }}
@@ -149,3 +149,5 @@ jobs:
           files: |
             dist/mi-node-linux-amd64
             dist/mi-node-linux-arm64
+            dist/xbctl-linux-amd64
+            dist/xbctl-linux-arm64
