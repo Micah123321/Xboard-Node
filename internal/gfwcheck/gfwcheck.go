@@ -79,7 +79,13 @@ type targetOutput struct {
 	result   TargetResult
 }
 
-var rttPattern = regexp.MustCompile(`=\s*([0-9.]+)/([0-9.]+)/([0-9.]+)/`)
+var latencyPatterns = []struct {
+	re    *regexp.Regexp
+	group int
+}{
+	{regexp.MustCompile(`=\s*([0-9.]+)/([0-9.]+)/([0-9.]+)(?:/[0-9.]+)?`), 2},
+	{regexp.MustCompile(`(?i)Average\s*=\s*([0-9.]+)\s*ms`), 1},
+}
 
 func Run(ctx context.Context, task Task) Report {
 	if task.CheckID <= 0 {
@@ -193,7 +199,7 @@ func pingTarget(parent context.Context, target Target, count int, timeoutSeconds
 
 	err := cmd.Run()
 	latency := parseAverageLatency(output.String())
-	if latency > 0 {
+	if err == nil || latency > 0 {
 		return TargetResult{Name: target.Name, Host: target.Host, Status: "ok", LatencyMS: latency}
 	}
 
@@ -212,15 +218,17 @@ func pingArgs(host string, count int, timeoutSeconds int) []string {
 }
 
 func parseAverageLatency(output string) float64 {
-	match := rttPattern.FindStringSubmatch(output)
-	if len(match) < 3 {
-		return 0
+	for _, item := range latencyPatterns {
+		match := item.re.FindStringSubmatch(output)
+		if len(match) <= item.group {
+			continue
+		}
+		value, err := strconv.ParseFloat(match[item.group], 64)
+		if err == nil {
+			return value
+		}
 	}
-	value, err := strconv.ParseFloat(match[2], 64)
-	if err != nil {
-		return 0
-	}
-	return value
+	return 0
 }
 
 func summarize(operators map[string]OperatorResult) Summary {
