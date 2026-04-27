@@ -89,7 +89,7 @@ func (s *SingBox) Protocols() []string {
 	}
 }
 
-func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) error {
+func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
 	if err := kernel.ValidateShadowsocks2022Credentials(nodeConfig, users); err != nil {
 		return err
 	}
@@ -197,7 +197,7 @@ func recycleOldBox(oldBox *box.Box, oldCancel context.CancelFunc, oldCtx context
 // Reload hot-swaps the inbound users and routing rules without restarting the box.
 // Routes, outbounds, and the connTracker stay alive so in-flight connections
 // continue to be tracked correctly.
-func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) error {
+func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
 	if err := kernel.ValidateShadowsocks2022Credentials(nodeConfig, users); err != nil {
 		return err
 	}
@@ -535,7 +535,7 @@ func (s *SingBox) reloadInboundsLocked(users []model.UserSpec) error {
 		return err
 	}
 
-	cfgMap := buildConfig(s.cfg, s.nodeConfig, users, s.certFile, s.keyFile)
+	cfgMap := buildConfig(s.cfg, s.nodeConfig, users, s.tls)
 	data, err := json.Marshal(cfgMap)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)

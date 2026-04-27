@@ -71,8 +71,8 @@ type MachineNode struct {
 
 // MachineNodesResponse is the response from GET /api/v2/server/machine/nodes.
 type MachineNodesResponse struct {
-	Nodes      []MachineNode      `json:"nodes"`
-	BaseConfig MachineBaseConfig  `json:"base_config"`
+	Nodes      []MachineNode     `json:"nodes"`
+	BaseConfig MachineBaseConfig `json:"base_config"`
 }
 
 // MachineBaseConfig holds polling intervals for machine mode.
@@ -94,10 +94,11 @@ type NodeConfig struct {
 	Routes          []RouteRule            `json:"routes"`
 
 	// Kernel settings (Mi extension)
-	KernelType      string           `json:"kernel_type,omitempty"`      // "singbox" or "xray"
-	KernelLogLevel  string           `json:"kernel_log_level,omitempty"` // "info", "warn", etc.
-	CustomOutbounds []OutboundConfig `json:"custom_outbounds,omitempty"`
-	CustomRoutes    []map[string]any `json:"custom_routes,omitempty"`
+	KernelType       string            `json:"kernel_type,omitempty"`      // "singbox" or "xray"
+	KernelLogLevel   string            `json:"kernel_log_level,omitempty"` // "info", "warn", etc.
+	CustomOutbounds  []OutboundConfig  `json:"custom_outbounds,omitempty"`
+	CustomRoutes     []map[string]any  `json:"custom_routes,omitempty"`
+	CustomRouteRules []CustomRouteRule `json:"custom_route_rules,omitempty"`
 
 	// Certificate settings (Mi extension)
 	CertConfig *CertConfig `json:"cert_config,omitempty"`

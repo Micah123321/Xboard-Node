@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cedar2025/xboard-node/internal/config"
-	"github.com/cedar2025/xboard-node/internal/model"
-	"github.com/cedar2025/xboard-node/internal/nlog"
-	"github.com/cedar2025/xboard-node/internal/panel"
+	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/gfwcheck"
+	"github.com/micah123321/mi-node/internal/model"
+	"github.com/micah123321/mi-node/internal/nlog"
+	"github.com/micah123321/mi-node/internal/panel"
 )
 
 // MachinePanelControlPlane implements ControlPlane for a single node running
@@ -131,6 +132,24 @@ func (p *MachinePanelControlPlane) Report(payload ReportPayload) error {
 		payload.CPU, payload.Mem, payload.Swap, payload.Disk,
 		payload.Metrics,
 	)
+}
+
+func (p *MachinePanelControlPlane) GFWTask(ctx context.Context) (*gfwcheck.Task, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	return p.client.GetGFWTask()
+}
+
+func (p *MachinePanelControlPlane) ReportGFWCheck(ctx context.Context, report gfwcheck.Report) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	return p.client.ReportGFWCheck(report)
 }
 
 func (p *MachinePanelControlPlane) ReportDevices(push PushClient, devices map[int][]string) {

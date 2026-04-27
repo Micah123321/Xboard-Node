@@ -15,9 +15,9 @@ import (
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/uuid"
 	xrayCore "github.com/xtls/xray-core/core"
+	featurebandwidth "github.com/xtls/xray-core/features/bandwidth"
 	"github.com/xtls/xray-core/features/inbound"
 	"github.com/xtls/xray-core/features/stats"
-	featurebandwidth "github.com/xtls/xray-core/features/bandwidth"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	xrayProxy "github.com/xtls/xray-core/proxy"
 	"github.com/xtls/xray-core/proxy/shadowsocks"
@@ -115,7 +115,7 @@ func (x *Xray) Protocols() []string {
 //	Phase 3 – Swap:    stop old instance          (brief kernel lock)
 //	Phase 4 – Start:   instance.Start             (no lock, potentially slow)
 //	Phase 5 – Commit:  store new state            (brief kernel lock)
-func (x *Xray) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) error {
+func (x *Xray) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
 	if err := kernel.ValidateShadowsocks2022Credentials(nodeConfig, users); err != nil {
 		return err
 	}
@@ -324,7 +324,7 @@ func (x *Xray) AddUsers(users []model.UserSpec) (int, error) {
 		x.users = merged
 		x.mu.Unlock()
 		x.updateDispatcherLimits(merged)
-	x.updateBandwidthLimits(merged)
+		x.updateBandwidthLimits(merged)
 		return 0, nil
 	}
 

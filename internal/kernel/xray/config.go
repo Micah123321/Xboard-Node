@@ -27,7 +27,7 @@ var ss2022Methods = map[string]ss2022Config{
 	"2022-blake3-chacha20-poly1305": {"2022-blake3-chacha20-poly1305", 32},
 }
 
-func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, certFile, keyFile string) M {
+func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert) M {
 	var outbounds []M
 	tags := make(map[string]bool)
 
@@ -101,7 +101,7 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 	}
 
 	// Merge panel routes and static config routes
-	cfg["routing"] = buildRouting(kcfg, nc.Routes, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute))
+	cfg["routing"] = buildRouting(nc.Routes, nc.CustomRouteRules, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute), kcfg)
 
 	mergeCustomXray(cfg, kcfg)
 	return cfg
@@ -399,7 +399,7 @@ func buildTrojan(base M, nc *model.NodeSpec, users []model.UserSpec, tc kernel.T
 	if security, ok := ss["security"].(string); !ok || (security != "tls" && security != "reality") {
 		fallback := *nc
 		fallback.TLS = 1
-		applyStreamSettings(base, &fallback, certFile, keyFile)
+		applyStreamSettings(base, &fallback, tc)
 	}
 	return base
 }
@@ -752,19 +752,31 @@ func buildRealitySettings(nc *model.NodeSpec) M {
 	return reality
 }
 
-func buildRouting(kcfg config.KernelConfig, rules []model.RouteRule, customRules []map[string]any) M {
+func buildRouting(rules []model.RouteRule, customRouteRules []model.CustomRouteRule, customRules []map[string]any, configs ...config.KernelConfig) M {
 	var xrayRules []M
+	var kcfg config.KernelConfig
+	hasKernelConfig := len(configs) > 0
+	if hasKernelConfig {
+		kcfg = configs[0]
+	}
 
-	if kcfg.Egress.DefaultRulesEnabled() {
+	if hasKernelConfig && kcfg.Egress.DefaultRulesEnabled() {
 		xrayRules = append(xrayRules, buildDefaultProtectionRules()...)
 	}
 
-	// Custom route rules (from Panel CustomRoutes or local config) have high priority
+	// Structured custom routes take priority over raw escape-hatch routes.
+	for _, rule := range customRouteRules {
+		if rule.Disabled {
+			continue
+		}
+		xrayRules = append(xrayRules, compileCustomRouteRule(rule)...)
+	}
+
 	for _, cr := range customRules {
 		xrayRules = append(xrayRules, M(cr))
 	}
 
-	if !kcfg.Egress.DefaultRulesEnabled() {
+	if hasKernelConfig && !kcfg.Egress.DefaultRulesEnabled() {
 		xrayRules = append(xrayRules, M{
 			"type": "field",
 			"ip": []string{

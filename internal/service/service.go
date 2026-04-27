@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/micah123321/mi-node/internal/cert"
+	"github.com/micah123321/mi-node/internal/cert/dnsproviders"
 	"github.com/micah123321/mi-node/internal/config"
 	"github.com/micah123321/mi-node/internal/controlplane"
 	"github.com/micah123321/mi-node/internal/gfwcheck"
@@ -69,11 +70,14 @@ type Service struct {
 	// pullResults delivers async pullViaAPI results back to the main goroutine.
 	pullResults chan pullResult
 
-	wsClient       controlplane.PushClient        // Push client (nil if push is not enabled)
-	wsEvents       chan controlplane.Event        // receives data events from push transport
-	wsStatusCh     chan controlplane.StatusChange // receives push connectivity notifications
-	wsCancel       context.CancelFunc             // cancels the WS client goroutine
-	wsDisconnectAt time.Time                      // when WS last disconnected (zero if connected)
+	wsClient         controlplane.PushClient        // Push client (nil if push is not enabled)
+	wsEvents         chan controlplane.Event        // receives data events from push transport
+	wsStatusCh       chan controlplane.StatusChange // receives push connectivity notifications
+	wsCancel         context.CancelFunc             // cancels the WS client goroutine
+	wsDisconnectAt   time.Time                      // when WS last disconnected (zero if connected)
+	wsResyncPending  atomic.Bool
+	machineMailbox   *controlplane.NodeMailbox
+	machineMailboxCh <-chan struct{}
 
 	egressProbeMu   sync.RWMutex
 	lastEgressProbe EgressDialCheckResult
@@ -131,6 +135,20 @@ func (b *apiBackoff) onFailure() {
 }
 
 func New(cfg *config.Config) *Service {
+	var cp controlplane.ControlPlane
+	if cfg.IsStandalone() {
+		cp = controlplane.NewLocalControlPlane(cfg)
+	} else {
+		cp = controlplane.NewPanelControlPlane(cfg.Panel, cfg.WS, cfg.Kernel)
+	}
+	return newService(cfg, cp)
+}
+
+func NewWithControlPlane(cfg *config.Config, cp controlplane.ControlPlane) *Service {
+	return newService(cfg, cp)
+}
+
+func newService(cfg *config.Config, cp controlplane.ControlPlane) *Service {
 	certMgr := cert.NewManager(cfg.Cert)
 
 	var k kernel.Kernel
@@ -899,7 +917,7 @@ func (s *Service) startKernel(nc *model.NodeSpec, users []model.UserSpec) bool {
 		return false
 	}
 
-	if err := s.kernel.Start(nc, users, s.cert.CertFile(), s.cert.KeyFile()); err != nil {
+	if err := s.kernel.Start(nc, users, s.cert.TLSCert()); err != nil {
 		nlog.Core().Error("failed to start kernel", "error", err)
 		return false
 	}
@@ -1092,7 +1110,7 @@ func (s *Service) applyChanges(ctx context.Context, configChanged, usersChanged 
 			slog.Error("failed to prepare TLS certificate", "error", err)
 			return
 		}
-		if err := s.kernel.Reload(s.lastConfig, s.lastUsers, s.cert.CertFile(), s.cert.KeyFile()); err != nil {
+		if err := s.kernel.Reload(s.lastConfig, s.lastUsers, s.cert.TLSCert()); err != nil {
 			nlog.Core().Warn(fmt.Sprintf("reload failed, restarting: %v", err))
 			s.startKernel(s.lastConfig, s.lastUsers)
 		} else {

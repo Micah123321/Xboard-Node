@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/kernel"
 	"github.com/micah123321/mi-node/internal/model"
 	"github.com/micah123321/mi-node/internal/panel"
 )
@@ -300,7 +301,7 @@ func TestBuildInbound_Trojan_NoTLS(t *testing.T) {
 		ServerPort: 80,
 		TLS:        0,
 	}
-	inbound := buildInbound(testNodeSpec(nc), testUsers, "", "")
+	inbound := buildInbound(testNodeSpec(nc), testUsers, kernel.TLSCert{})
 	tls, exists := inbound["tls"].(M)
 	if !exists {
 		t.Fatal("trojan with tls=0 should still get TLS")
@@ -541,7 +542,7 @@ func TestBuildConfig_WithSOCKS5Proxy(t *testing.T) {
 		ServerPort: 111,
 		Cipher:     "aes-128-gcm",
 	}
-	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, "", "")
+	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, kernel.TLSCert{})
 
 	outbounds := cfg["outbounds"].([]M)
 	foundProxy := false
@@ -575,7 +576,7 @@ func TestBuildConfig_WithShadowsocksProxy(t *testing.T) {
 		ServerPort: 111,
 		Cipher:     "aes-128-gcm",
 	}
-	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, "", "")
+	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, kernel.TLSCert{})
 
 	outbounds := cfg["outbounds"].([]M)
 	foundProxy := false
@@ -611,7 +612,7 @@ func TestBuildConfig_WithShadowsocks2022Proxy(t *testing.T) {
 		ServerPort: 111,
 		Cipher:     "aes-128-gcm",
 	}
-	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, "", "")
+	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers, kernel.TLSCert{})
 
 	outbounds := cfg["outbounds"].([]M)
 	for _, outbound := range outbounds {
@@ -639,7 +640,7 @@ func TestBuildConfig_TUICWithShadowsocksProxy(t *testing.T) {
 		ServerName:        "node.example.com",
 		CongestionControl: "bbr",
 	}
-	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers[:1], "/path/cert.pem", "/path/key.pem")
+	cfg := buildConfig(kcfg, testNodeSpec(nc), testUsers[:1], kernel.TLSCert{CertPEM: []byte("CERT"), KeyPEM: []byte("KEY")})
 
 	inbounds := cfg["inbounds"].([]M)
 	if len(inbounds) != 1 {
@@ -752,7 +753,7 @@ func TestBuildConfig_AllProtocols_ValidJSON(t *testing.T) {
 // --- Routes ---
 
 func TestBuildRoutes_Default(t *testing.T) {
-	route := buildRoutes(config.KernelConfig{}, nil, nil)
+	route := buildRoutes(nil, nil, nil, config.KernelConfig{})
 	assertMapValue(t, route, "final", "direct")
 
 	rules := route["rules"].([]M)
@@ -799,7 +800,7 @@ func TestBuildRoutes_WithCustomRules(t *testing.T) {
 		{ID: 2, Match: []string{"10.0.0.0/8"}, Action: "block"},
 		{ID: 3, Match: []string{"allowed.com"}, Action: "direct"},
 	}
-	route := buildRoutes(config.KernelConfig{}, testRouteRules(rules), nil)
+	route := buildRoutes(testRouteRules(rules), nil, nil, config.KernelConfig{})
 	allRules := route["rules"].([]M)
 
 	if len(allRules) != 6 {
@@ -824,7 +825,7 @@ func TestBuildRoutes_MultiMatch(t *testing.T) {
 		{ID: 1, Match: []string{"*.evil.com", "bad.org", "192.168.1.0/24"}, Action: "block"},
 		{ID: 2, Match: []string{"*.bypass.com"}, Action: "direct"},
 	}
-	route := buildRoutes(config.KernelConfig{}, testRouteRules(rules), nil)
+	route := buildRoutes(testRouteRules(rules), nil, nil, config.KernelConfig{})
 	allRules := route["rules"].([]M)
 
 	// 3 default protection rules + 1 domain rule + 1 CIDR rule + 1 direct rule = 6
@@ -872,8 +873,8 @@ func TestBuildRoutes_WithCustomRouteRules(t *testing.T) {
 	}
 	route := buildRoutes(nil, customRules, nil)
 	allRules := route["rules"].([]M)
-	if len(allRules) != 9 {
-		t.Fatalf("rules count: got %d, want 9", len(allRules))
+	if len(allRules) != 8 {
+		t.Fatalf("rules count: got %d, want 8", len(allRules))
 	}
 	if allRules[0]["domain"].([]string)[0] != "full.example.com" {
 		t.Fatalf("unexpected exact domain rule: %v", allRules[0])
@@ -887,14 +888,17 @@ func TestBuildRoutes_WithCustomRouteRules(t *testing.T) {
 	if allRules[3]["port"].([]int)[0] != 53 {
 		t.Fatalf("unexpected port rule: %v", allRules[3])
 	}
-	if allRules[4]["network"].([]string)[0] != "tcp" {
-		t.Fatalf("unexpected network rule: %v", allRules[4])
+	if allRules[4]["port_range"].([]string)[0] != "1000:1002" {
+		t.Fatalf("unexpected port range rule: %v", allRules[4])
 	}
-	if allRules[5]["source_ip_cidr"].([]string)[0] != "10.10.0.0/16" {
-		t.Fatalf("unexpected source cidr rule: %v", allRules[5])
+	if allRules[5]["network"].([]string)[0] != "tcp" {
+		t.Fatalf("unexpected network rule: %v", allRules[5])
 	}
-	if allRules[6]["source_port_range"].([]string)[0] != "2000:2001" {
-		t.Fatalf("unexpected source port rule: %v", allRules[6])
+	if allRules[6]["source_ip_cidr"].([]string)[0] != "10.10.0.0/16" {
+		t.Fatalf("unexpected source cidr rule: %v", allRules[6])
+	}
+	if allRules[7]["source_port_range"].([]string)[0] != "2000:2001" {
+		t.Fatalf("unexpected source port rule: %v", allRules[7])
 	}
 }
 

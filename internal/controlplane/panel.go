@@ -178,7 +178,7 @@ func (p *PanelControlPlane) newPushClient(metricsFn func() map[string]interface{
 	return &panelPushClient{inner: inner}
 }
 
-func translateWSEvent(event panel.WSEvent) Event {
+func TranslateWSEvent(event panel.WSEvent, kcfg config.KernelConfig) (Event, error) {
 	translated := Event{
 		Type:        EventType(event.Type),
 		DeltaAction: event.DeltaAction,

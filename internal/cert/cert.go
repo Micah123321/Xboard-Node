@@ -23,7 +23,9 @@ import (
 
 	"github.com/caddyserver/certmagic"
 
+	"github.com/micah123321/mi-node/internal/cert/dnsproviders"
 	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/kernel"
 	"github.com/micah123321/mi-node/internal/nlog"
 )
 
@@ -47,7 +49,9 @@ import (
 //  3. "file" (if both CertFile and KeyFile paths are provided)
 //  4. "none" (default)
 type Manager struct {
-	cfg config.CertConfig
+	cfg      config.CertConfig
+	certFile string
+	keyFile  string
 
 	// Atomic so the ACME renewal goroutine can swap without racing readers.
 	mat atomic.Pointer[certMaterial]
@@ -67,7 +71,59 @@ type certMaterial struct {
 
 // NewManager creates a certificate manager.
 func NewManager(cfg config.CertConfig) *Manager {
-	return &Manager{cfg: cfg}
+	m := &Manager{cfg: cfg}
+	m.setCertPaths()
+	return m
+}
+
+func (m *Manager) CertFile() string { return m.certFile }
+func (m *Manager) KeyFile() string  { return m.keyFile }
+
+// storePEM atomically swaps the in-memory cert material and persists it for
+// restart recovery and for callers that still inspect certificate paths.
+func (m *Manager) storePEM(cert, key []byte) {
+	m.mat.Store(&certMaterial{certPEM: cert, keyPEM: key})
+	m.persistPEM(cert, key)
+	m.persistPathPEM(cert, key)
+}
+
+// persistPEM writes cert/key to cert_dir for restart recovery.
+// Errors are logged but not returned because runtime TLS material is already
+// available in memory.
+func (m *Manager) persistPEM(cert, key []byte) {
+	dir := m.cfg.CertDir
+	if dir == "" {
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		nlog.Core().Warn("cert: failed to create cert_dir", "dir", dir, "error", err)
+		return
+	}
+	certPath := filepath.Join(dir, "cert.pem")
+	keyPath := filepath.Join(dir, "key.pem")
+	if err := atomicWriteFile(certPath, cert, 0o644); err != nil {
+		nlog.Core().Warn("cert: failed to persist cert", "path", certPath, "error", err)
+	}
+	if err := atomicWriteFile(keyPath, key, 0o600); err != nil {
+		nlog.Core().Warn("cert: failed to persist key", "path", keyPath, "error", err)
+	}
+}
+
+// persistPathPEM writes to the legacy cert/key paths used by local checks.
+func (m *Manager) persistPathPEM(cert, key []byte) {
+	if m.resolveMode() == "file" || m.certFile == "" || m.keyFile == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(m.certFile), 0o755); err != nil {
+		nlog.Core().Warn("cert: failed to create cert path dir", "dir", filepath.Dir(m.certFile), "error", err)
+		return
+	}
+	if err := atomicWriteFile(m.certFile, cert, 0o644); err != nil {
+		nlog.Core().Warn("cert: failed to write cert path", "path", m.certFile, "error", err)
+	}
+	if err := atomicWriteFile(m.keyFile, key, 0o600); err != nil {
+		nlog.Core().Warn("cert: failed to write key path", "path", m.keyFile, "error", err)
+	}
 }
 
 // setCertPaths derives certFile / keyFile from the current m.cfg.
@@ -146,6 +202,7 @@ func (m *Manager) Reconfigure(ctx context.Context, newCfg config.CertConfig) (bo
 
 	oldTLS := m.TLSCert()
 	m.cfg = newCfg
+	m.setCertPaths()
 
 	if err := m.Start(ctx); err != nil {
 		return false, fmt.Errorf("cert reconfigure: %w", err)

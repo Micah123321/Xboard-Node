@@ -13,9 +13,10 @@ import (
 
 // Watcher reloads the config file on change (debounced) and calls onChange.
 type Watcher struct {
-	path     string
-	onChange func(*Config)
-	watcher  *fsnotify.Watcher
+	path         string
+	onChange     func(*Config)
+	onChangeRoot func(*RootConfig)
+	watcher      *fsnotify.Watcher
 
 	stopOnce sync.Once
 	stopCh   chan struct{}
@@ -57,7 +58,6 @@ func WatchConfig(ctx context.Context, path string, onChange func(*Config)) (*Wat
 	return w, nil
 }
 
-
 // WatchConfigRoot watches path and reloads the root config model.
 func WatchConfigRoot(ctx context.Context, path string, onChange func(*RootConfig)) (*Watcher, error) {
 	absPath, err := filepath.Abs(path)
@@ -78,14 +78,14 @@ func WatchConfigRoot(ctx context.Context, path string, onChange func(*RootConfig
 
 	w := &Watcher{
 		path:         absPath,
-		debounce:     1 * time.Second,
 		onChangeRoot: onChange,
 		watcher:      fsw,
 		stopCh:       make(chan struct{}),
 	}
+	w.SetDebounce(time.Second)
 
 	go w.loop(ctx)
-	nlog.Core().Info("config watcher started", "path", absPath)
+	slog.Info("config watcher started", "path", absPath)
 	return w, nil
 }
 
@@ -132,6 +132,18 @@ func (w *Watcher) loop(ctx context.Context) {
 
 func (w *Watcher) reload() {
 	if w.stopped.Load() {
+		return
+	}
+
+	if w.onChangeRoot != nil {
+		root, err := LoadRoot(w.path)
+		if err != nil {
+			slog.Error("config reload failed, keeping current config", "error", err)
+			return
+		}
+
+		slog.Info("config reloaded successfully")
+		w.onChangeRoot(root)
 		return
 	}
 

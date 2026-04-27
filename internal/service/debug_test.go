@@ -27,13 +27,13 @@ func (f *fakeDebugKernel) Protocols() []string { return nil }
 
 func (f *fakeDebugKernel) Capabilities() kernel.Capabilities { return kernel.Capabilities{} }
 
-func (f *fakeDebugKernel) Start(*model.NodeSpec, []model.UserSpec, string, string) error { return nil }
+func (f *fakeDebugKernel) Start(*model.NodeSpec, []model.UserSpec, kernel.TLSCert) error { return nil }
 
 func (f *fakeDebugKernel) Stop() {}
 
 func (f *fakeDebugKernel) IsRunning() bool { return f.running }
 
-func (f *fakeDebugKernel) Reload(*model.NodeSpec, []model.UserSpec, string, string) error { return nil }
+func (f *fakeDebugKernel) Reload(*model.NodeSpec, []model.UserSpec, kernel.TLSCert) error { return nil }
 
 func (f *fakeDebugKernel) AddUsers([]model.UserSpec) (int, error) { return 0, nil }
 

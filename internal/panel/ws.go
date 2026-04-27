@@ -36,7 +36,12 @@ type WSEvent struct {
 
 	// Device sync fields
 	DeviceUsers map[int][]string // userID -> IPs (for sync.devices)
-	GFWCheck    *gfwcheck.Task
+	NodeID      int              // populated in machine-mode WS events for routing
+
+	// Machine node discovery fields (for sync.nodes)
+	Nodes []MachineNode
+
+	GFWCheck *gfwcheck.Task
 }
 
 // WSStatusChange notifies the service when WS connectivity changes.
@@ -345,6 +350,9 @@ func (w *WSClient) handleMessage(msg wsMessage) {
 	case WSEventSyncDevices:
 		w.handleDataEvent(msg)
 
+	case WSEventSyncNodes:
+		w.handleDataEvent(msg)
+
 	case WSEventGFWCheck:
 		w.handleDataEvent(msg)
 
@@ -426,6 +434,16 @@ func (w *WSClient) handleDataEvent(msg wsMessage) {
 			return
 		}
 		event.DeviceUsers = p.Users
+		event.NodeID = p.NodeID
+
+	case WSEventSyncNodes:
+		nlog.Core().Info("ws sync nodes event received (machine node list changed)")
+		var p syncNodesPayload
+		if err := decodeData(msg.Data, &p); err != nil {
+			nlog.Core().Warn("ws: cannot decode nodes payload", "error", err)
+			return
+		}
+		event.Nodes = p.Nodes
 
 	case WSEventGFWCheck:
 		nlog.Core().Debug("ws gfw check event received")

@@ -8,11 +8,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/micah123321/mi-node/internal/config"
 	"github.com/micah123321/mi-node/internal/kernel"
 	"github.com/micah123321/mi-node/internal/model"
 	"github.com/micah123321/mi-node/internal/nlog"
-	"github.com/go-viper/mapstructure/v2"
 )
 
 // M is a shorthand for building JSON-like maps
@@ -68,7 +68,7 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 	}
 
 	// Merge panel routes and static config routes
-	cfg["route"] = buildRoutes(kcfg, nc.Routes, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute))
+	cfg["route"] = buildRoutes(nc.Routes, nc.CustomRouteRules, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute), kcfg)
 
 	// Automatically enable rule_set caching (cache_file) when panel routes
 	// reference geoip:/geosite: entries so that the downloaded .srs rule_set
@@ -222,19 +222,31 @@ func buildDefaultProtectionRules() []M {
 	}
 }
 
-func buildRoutes(kcfg config.KernelConfig, panelRoutes []model.RouteRule, custom []map[string]any) M {
+func buildRoutes(panelRoutes []model.RouteRule, customRules []model.CustomRouteRule, custom []map[string]any, configs ...config.KernelConfig) M {
 	var rules []M
+	var kcfg config.KernelConfig
+	hasKernelConfig := len(configs) > 0
+	if hasKernelConfig {
+		kcfg = configs[0]
+	}
 
-	if kcfg.Egress.DefaultRulesEnabled() {
+	if hasKernelConfig && kcfg.Egress.DefaultRulesEnabled() {
 		rules = append(rules, buildDefaultProtectionRules()...)
 	}
 
-	// Custom Routes (Panel-pushed or Local) go first after built-in protection rules.
+	// Structured custom routes take priority over raw escape-hatch routes.
+	for _, rule := range customRules {
+		if rule.Disabled {
+			continue
+		}
+		rules = append(rules, compileCustomRouteRule(rule)...)
+	}
+
 	for _, cr := range custom {
 		rules = append(rules, M(cr))
 	}
 
-	if !kcfg.Egress.DefaultRulesEnabled() {
+	if hasKernelConfig && !kcfg.Egress.DefaultRulesEnabled() {
 		// Preserve the historical private-network block when the maintained rule set is disabled.
 		rules = append(rules, M{
 			"outbound": "block",
@@ -348,14 +360,18 @@ func compileCustomRouteRule(rule model.CustomRouteRule) []M {
 	}
 	if len(rule.Match.Ports) > 0 {
 		ports, portRanges := splitPorts(rule.Match.Ports)
-		entry := M{"outbound": outbound}
 		if len(ports) > 0 {
-			entry["port"] = ports
+			compiled = append(compiled, M{
+				"port":     ports,
+				"outbound": outbound,
+			})
 		}
 		if len(portRanges) > 0 {
-			entry["port_range"] = portRanges
+			compiled = append(compiled, M{
+				"port_range": portRanges,
+				"outbound":   outbound,
+			})
 		}
-		compiled = append(compiled, entry)
 	}
 	if len(rule.Match.Networks) > 0 {
 		compiled = append(compiled, M{
@@ -371,14 +387,18 @@ func compileCustomRouteRule(rule model.CustomRouteRule) []M {
 	}
 	if len(rule.Match.SourcePorts) > 0 {
 		ports, portRanges := splitPorts(rule.Match.SourcePorts)
-		entry := M{"outbound": outbound}
 		if len(ports) > 0 {
-			entry["source_port"] = ports
+			compiled = append(compiled, M{
+				"source_port": ports,
+				"outbound":    outbound,
+			})
 		}
 		if len(portRanges) > 0 {
-			entry["source_port_range"] = portRanges
+			compiled = append(compiled, M{
+				"source_port_range": portRanges,
+				"outbound":          outbound,
+			})
 		}
-		compiled = append(compiled, entry)
 	}
 	return compiled
 }
@@ -958,10 +978,8 @@ func buildTLSConfig(nc *model.NodeSpec, tc kernel.TLSCert) M {
 		}
 	}
 
-	if certFile != "" && keyFile != "" {
-		tls["certificate_path"] = certFile
-		tls["key_path"] = keyFile
-	}
+	t["certificate"] = []string{string(tc.CertPEM)}
+	t["key"] = []string{string(tc.KeyPEM)}
 
 	return t
 }
