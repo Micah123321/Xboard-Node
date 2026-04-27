@@ -39,9 +39,10 @@ https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/scripts/mig
   - `runtime.gomemlimit`
   - `runtime.gogc`
 - 迁移前自动备份旧配置和相关 service 定义
-- 停掉旧 `xboard-node` / 当前 `mi-node` 服务，避免端口冲突
+- 停掉旧 `xboard-node` / 旧模板 `mi-node@<id>` 服务，避免端口冲突
 - 用识别出的参数重新执行 `mi-node` 的 `install.sh`
-- 迁移成功后禁用旧 `xboard-node` 服务
+- 写入或合并到 `/etc/mi-node/config.yml` 的 `instances:`，单机多节点 `--all` 会保留已迁移节点并追加/替换当前节点
+- 迁移成功后由 `mi-node.service` 管理，并禁用旧 `xboard-node` 服务
 
 ## 适用方式
 
@@ -132,8 +133,16 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/hea
 这条命令会：
 
 - 下载最新 `mi-node` 二进制
-- 扫描 `/etc/mi-node/*/config.yml`
-- 自动重启所有运行中的 `mi-node@<id>`
+- 下载最新 `xbctl` 管理工具
+- 如果当前是新版原生部署并且 `mi-node.service` 正在运行，会自动重启 `mi-node.service`
+
+如果某台机器仍然是旧模板部署，也就是还在运行 `mi-node@<id>`，`update` 只会更新二进制，不会自动重启这些旧模板实例。此时需要补一次：
+
+```bash
+systemctl list-units 'mi-node@*.service' --state=active --no-legend --no-pager \
+  | awk '{print $1}' \
+  | xargs -r systemctl restart
+```
 
 ## 建议执行顺序
 
@@ -142,7 +151,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/hea
 ```bash
 ssh root@YOUR_HOST "bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/scripts/migrate-to-mi-node.sh) --dry-run"
 ssh root@YOUR_HOST "bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/scripts/migrate-to-mi-node.sh)"
-ssh root@YOUR_HOST 'systemctl status mi-node@YOUR_ID --no-pager'
+ssh root@YOUR_HOST 'systemctl status mi-node --no-pager'
 ```
 
 确认单机无误后，再批量跑全量服务器。

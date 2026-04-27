@@ -19,7 +19,7 @@ usage() {
   - 默认行为:
       仅检测到 1 个节点配置 -> 自动迁移该节点
       检测到多个节点配置     -> 需显式传 --node-id 或 --all
-  - 迁移成功后会启动 mi-node@<id>，并禁用旧 xboard-node 服务
+  - 迁移成功后会启动 mi-node.service，并禁用旧 xboard-node 服务
 
 参数:
   --node-id ID        只迁移指定节点
@@ -70,7 +70,7 @@ yaml_get_top_level() {
     local file="$1"
     local key="$2"
     awk -v key="$key" '
-        $0 ~ "^[[:space:]]*" key ":[[:space:]]*" {
+        $0 ~ "^" key ":[[:space:]]*" {
             sub("^[[:space:]]*" key ":[[:space:]]*", "", $0)
             print $0
             exit
@@ -100,7 +100,7 @@ yaml_get_section_value() {
         }
         {
             line = $0
-            if (line ~ "^[[:space:]]*" section ":[[:space:]]*$") {
+            if (line ~ "^" section ":[[:space:]]*$") {
                 in_section = 1
                 section_indent = indent_len(line)
                 next
@@ -145,7 +145,7 @@ yaml_get_cert_dns_env() {
         }
         {
             line = $0
-            if (line ~ "^[[:space:]]*cert:[[:space:]]*$") {
+            if (line ~ "^cert:[[:space:]]*$") {
                 in_cert = 1
                 cert_indent = indent_len(line)
                 in_dns_env = 0
@@ -200,6 +200,7 @@ find_candidate_configs() {
     local p
     for p in "${paths[@]}"; do
         [[ -f "$p" ]] || continue
+        [[ -n "$(node_id_from_config "$p")" ]] || continue
         printf '%s\n' "$p"
     done | awk '!seen[$0]++'
 }
@@ -311,7 +312,7 @@ migrate_one() {
         log "证书域名: ${cert_domain}"
     fi
 
-    args=(-a "$panel_url" -t "$panel_token" -n "$node_id")
+    args=(--yes -a "$panel_url" -t "$panel_token" -n "$node_id")
 
     if [[ -n "$kernel_type" ]]; then
         args+=(-k "$kernel_type")
@@ -356,6 +357,14 @@ migrate_one() {
 
     bash <(curl -fsSL "$RAW_URL") "${args[@]}"
 
+    if systemctl is-active mi-node.service >/dev/null 2>&1; then
+        disable_old_services "$node_id"
+        log "迁移完成: node_id=${node_id} 已由 mi-node.service 管理"
+        log "状态检查: systemctl status mi-node --no-pager"
+        log "日志查看: journalctl -u mi-node -n 80 --no-pager"
+        return 0
+    fi
+
     if systemctl is-active "mi-node@${node_id}" >/dev/null 2>&1; then
         disable_old_services "$node_id"
         log "迁移完成: mi-node@${node_id}"
@@ -364,7 +373,7 @@ migrate_one() {
         return 0
     fi
 
-    err "mi-node@${node_id} 未处于 active 状态，请查看日志"
+    err "mi-node.service 未处于 active 状态，请查看日志: journalctl -u mi-node -n 120 --no-pager"
     return 1
 }
 

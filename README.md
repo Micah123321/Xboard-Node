@@ -172,7 +172,7 @@ xbctl service logs
 bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/scripts/migrate-to-mi-node.sh)
 ```
 
-它会在目标机器上自动读取旧配置中的 `panel.url / token / node_id / cert.* / runtime.*`，再调用当前仓库的 `mi-node install.sh` 完成切换。
+它会在目标机器上自动读取旧配置中的 `panel.url / token / node_id / cert.* / runtime.*`，再调用当前仓库的 `mi-node install.sh` 完成切换。迁移成功后统一由 `mi-node.service` 管理；单机多节点 `--all` 会合并到 `/etc/mi-node/config.yml` 的 `instances:`，不会为每个节点继续创建 `mi-node@<id>`。
 
 常见用法：
 

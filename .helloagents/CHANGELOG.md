@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### 快速修改
+
+- **[install/migrate/xbctl]**: 修复旧 `Xboard-Node` 迁移与新版单服务部署不兼容：`install.sh` 改由 `xbctl config init` 合并/替换 `instances:` 与 `credentials.env`，`migrate-to-mi-node.sh` 改以 `mi-node.service` 验收并过滤新版 RootConfig 候选，避免 `--all` 多节点迁移覆盖前一个节点。 — by yinjianm
+  - 类型: 快速修改（无方案包）
+  - 文件: install.sh, scripts/migrate-to-mi-node.sh, cmd/xbctl/main.go, cmd/xbctl/main_test.go, MIGRATE.md, README.md
+
 ## [0.0.5] - 2026-04-28
 
 ### 修复

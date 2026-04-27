@@ -65,6 +65,7 @@ type fileInstance struct {
 	Log        fileLogConfig      `yaml:"log"`
 	Runtime    *fileRuntimeConfig `yaml:"runtime,omitempty"`
 	HealthPort int                `yaml:"health_port,omitempty"`
+	DebugPort  int                `yaml:"debug_port,omitempty"`
 	Machine    *fileMachineConfig `yaml:"machine,omitempty"`
 	Standalone map[string]any     `yaml:"standalone,omitempty"`
 	Cert       *config.CertConfig `yaml:"cert,omitempty"`
@@ -203,7 +204,7 @@ func printUsage() {
   xbctl list [--output text|json]
   xbctl instance list [--output text|json]
   xbctl instance get <id> [--output text|json]
-  xbctl config init --mode node|machine --panel-url URL --token TOKEN [flags]
+  xbctl config init --mode node|machine --panel-url URL --token TOKEN [cert/egress flags]
   xbctl config health-port [--config PATH]
   xbctl service status|start|stop|restart|enable|disable|logs
   xbctl health
@@ -895,6 +896,7 @@ func writeRootConfig(path string, root *config.RootConfig) error {
 				Output: inst.Log.Output,
 			},
 			HealthPort: inst.HealthPort,
+			DebugPort:  inst.DebugPort,
 		}
 		if !inst.IsMachineMode() && (inst.Node.PushInterval != 0 || inst.Node.PullInterval != 0 || inst.Node.TrackInterval != 0 || inst.Node.DeviceReportInterval != 0) {
 			fi.Node = &fileNodeConfig{
@@ -1232,23 +1234,35 @@ func runConfig(args []string) error {
 //	ENV_KEY=<credential-env-var-name>
 func runConfigInit(args []string) error {
 	var (
-		configIn       string
-		configOut      string
-		credentialsIn  string
-		credentialsOut string
-		metaPath       string
-		mode           string
-		panelURL       string
-		nodeID         int
-		nodeType       string
-		machineID      int
-		kernelType     string
-		healthPort     int
-		gomemlimit     string
-		gogc           int
-		installRoot    string
-		token          string
-		releaseVersion string
+		configIn        string
+		configOut       string
+		credentialsIn   string
+		credentialsOut  string
+		metaPath        string
+		mode            string
+		panelURL        string
+		nodeID          int
+		nodeType        string
+		machineID       int
+		kernelType      string
+		healthPort      int
+		debugPort       int
+		gomemlimit      string
+		gogc            int
+		installRoot     string
+		token           string
+		releaseVersion  string
+		certMode        string
+		certDomain      string
+		certEmail       string
+		certHTTPPort    int
+		certDNSProvider string
+		certDNSEnv      = make(map[string]string)
+		egressSocksAddr string
+		egressSocksPort int
+		egressSocksUser string
+		egressSocksPass string
+		egressSSURI     string
 	)
 
 	for i := 0; i < len(args); i++ {
@@ -1304,6 +1318,13 @@ func runConfigInit(args []string) error {
 				return fmt.Errorf("invalid --health-port: %w", err)
 			}
 			healthPort = v
+		case "--debug-port":
+			i++
+			v, err := strconv.Atoi(args[i])
+			if err != nil {
+				return fmt.Errorf("invalid --debug-port: %w", err)
+			}
+			debugPort = v
 		case "--gomemlimit":
 			i++
 			gomemlimit = args[i]
@@ -1323,6 +1344,51 @@ func runConfigInit(args []string) error {
 		case "--version":
 			i++
 			releaseVersion = args[i]
+		case "--cert-mode":
+			i++
+			certMode = args[i]
+		case "--cert-domain":
+			i++
+			certDomain = args[i]
+		case "--cert-email":
+			i++
+			certEmail = args[i]
+		case "--cert-http-port":
+			i++
+			v, err := strconv.Atoi(args[i])
+			if err != nil {
+				return fmt.Errorf("invalid --cert-http-port: %w", err)
+			}
+			certHTTPPort = v
+		case "--cert-dns-provider":
+			i++
+			certDNSProvider = args[i]
+		case "--cert-dns-env":
+			i++
+			key, value, ok := strings.Cut(args[i], "=")
+			if !ok || strings.TrimSpace(key) == "" {
+				return fmt.Errorf("invalid --cert-dns-env %q, expected KEY=VALUE", args[i])
+			}
+			certDNSEnv[strings.TrimSpace(key)] = value
+		case "--egress-socks5-address":
+			i++
+			egressSocksAddr = args[i]
+		case "--egress-socks5-port":
+			i++
+			v, err := strconv.Atoi(args[i])
+			if err != nil {
+				return fmt.Errorf("invalid --egress-socks5-port: %w", err)
+			}
+			egressSocksPort = v
+		case "--egress-socks5-user":
+			i++
+			egressSocksUser = args[i]
+		case "--egress-socks5-pass":
+			i++
+			egressSocksPass = args[i]
+		case "--egress-shadowsocks-uri":
+			i++
+			egressSSURI = args[i]
 		}
 	}
 
@@ -1348,6 +1414,7 @@ func runConfigInit(args []string) error {
 		},
 		Log:        config.LogConfig{Level: "info", Output: "stdout"},
 		HealthPort: healthPort,
+		DebugPort:  debugPort,
 	}
 
 	if mode == "machine" {
@@ -1386,6 +1453,31 @@ func runConfigInit(args []string) error {
 	}
 	if gogc > 0 {
 		inst.Runtime.GoGCPercent = gogc
+	}
+	if certMode != "" || certDomain != "" || certEmail != "" || certHTTPPort > 0 || certDNSProvider != "" || len(certDNSEnv) > 0 {
+		inst.Cert.CertMode = certMode
+		inst.Cert.Domain = certDomain
+		inst.Cert.Email = certEmail
+		inst.Cert.HTTPPort = certHTTPPort
+		inst.Cert.DNSProvider = certDNSProvider
+		inst.Cert.DNSEnv = certDNSEnv
+	}
+	if egressSocksAddr != "" || egressSocksPort > 0 || egressSocksUser != "" || egressSocksPass != "" || egressSSURI != "" {
+		enableDefaultRules := true
+		preferIPv4 := true
+		inst.Kernel.Egress.EnableDefaultRules = &enableDefaultRules
+		inst.Kernel.Egress.PreferIPv4 = &preferIPv4
+	}
+	if egressSocksAddr != "" || egressSocksPort > 0 || egressSocksUser != "" || egressSocksPass != "" {
+		inst.Kernel.Egress.SOCKS5 = config.SOCKS5EgressConfig{
+			Address:  egressSocksAddr,
+			Port:     egressSocksPort,
+			Username: egressSocksUser,
+			Password: egressSocksPass,
+		}
+	}
+	if egressSSURI != "" {
+		inst.Kernel.Egress.Shadowsocks.URI = egressSSURI
 	}
 
 	// Load existing config (if any).

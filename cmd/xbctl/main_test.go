@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -60,4 +62,170 @@ func TestWriteRootConfigPreservesInstanceEgress(t *testing.T) {
 	if got := instances[0].Kernel.Egress.SOCKS5.Port; got != 1080 {
 		t.Fatalf("SOCKS5 port = %d, want 1080", got)
 	}
+}
+
+func TestRunConfigInitMergesInstancesAndPreservesInstallOptions(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	credentialsPath := filepath.Join(dir, "credentials.env")
+	metaPath := filepath.Join(dir, "install-meta.json")
+	installRoot := filepath.Join(dir, "mi-node")
+
+	if err := runConfigInit([]string{
+		"--mode", "node",
+		"--panel-url", "http://panel.example.com",
+		"--node-id", "266",
+		"--node-type", "trojan",
+		"--kernel", "singbox",
+		"--health-port", "65530",
+		"--debug-port", "65531",
+		"--token", "token-266",
+		"--version", "test-version",
+		"--output", configPath,
+		"--credentials-out", credentialsPath,
+		"--meta", metaPath,
+		"--install-root", installRoot,
+		"--gomemlimit", "128MiB",
+		"--gogc", "50",
+		"--cert-mode", "dns",
+		"--cert-domain", "fxhk.example.com",
+		"--cert-email", "admin@example.com",
+		"--cert-http-port", "8080",
+		"--cert-dns-provider", "cloudflare",
+		"--cert-dns-env", "CF_API_TOKEN=secret-266",
+		"--egress-socks5-address", "127.0.0.1",
+		"--egress-socks5-port", "1080",
+		"--egress-socks5-user", "user",
+		"--egress-socks5-pass", "pass",
+	}); err != nil {
+		t.Fatalf("first config init: %v", err)
+	}
+
+	ssURI := "ss://YWVzLTEyOC1nY206eW91ci1wYXNzd29yZA==@127.0.0.1:8388"
+	if err := runConfigInit([]string{
+		"--config", configPath,
+		"--output", configPath,
+		"--credentials-in", credentialsPath,
+		"--credentials-out", credentialsPath,
+		"--meta", metaPath,
+		"--mode", "node",
+		"--panel-url", "http://panel.example.com",
+		"--node-id", "267",
+		"--kernel", "singbox",
+		"--health-port", "65532",
+		"--debug-port", "65533",
+		"--token", "token-267",
+		"--version", "test-version",
+		"--install-root", installRoot,
+		"--cert-mode", "http",
+		"--cert-domain", "next.example.com",
+		"--cert-http-port", "80",
+		"--egress-shadowsocks-uri", ssURI,
+	}); err != nil {
+		t.Fatalf("second config init: %v", err)
+	}
+
+	root, err := loadWritableRootConfig(configPath)
+	if err != nil {
+		t.Fatalf("load writable config: %v", err)
+	}
+	instances := normalizeRootInstances(root)
+	if got := len(instances); got != 2 {
+		t.Fatalf("instance count = %d, want 2", got)
+	}
+
+	first := findInstanceByNodeID(t, instances, 266)
+	second := findInstanceByNodeID(t, instances, 267)
+	if first.Panel.TokenEnv == "" || second.Panel.TokenEnv == "" || first.Panel.TokenEnv == second.Panel.TokenEnv {
+		t.Fatalf("token env keys are not unique: first=%q second=%q", first.Panel.TokenEnv, second.Panel.TokenEnv)
+	}
+
+	credentials, err := os.ReadFile(credentialsPath)
+	if err != nil {
+		t.Fatalf("read credentials: %v", err)
+	}
+	credentialsText := string(credentials)
+	for _, want := range []string{
+		first.Panel.TokenEnv + "=token-266",
+		second.Panel.TokenEnv + "=token-267",
+	} {
+		if !strings.Contains(credentialsText, want) {
+			t.Fatalf("credentials missing %q:\n%s", want, credentialsText)
+		}
+	}
+
+	if first.HealthPort != 65530 || first.DebugPort != 65531 {
+		t.Fatalf("first ports = health:%d debug:%d, want 65530/65531", first.HealthPort, first.DebugPort)
+	}
+	if first.Runtime.GoMemLimit != "128MiB" || first.Runtime.GoGCPercent != 50 {
+		t.Fatalf("first runtime = %+v", first.Runtime)
+	}
+	if first.Cert.CertMode != "dns" || first.Cert.Domain != "fxhk.example.com" || first.Cert.DNSProvider != "cloudflare" {
+		t.Fatalf("first cert = %+v", first.Cert)
+	}
+	if got := first.Cert.DNSEnv["CF_API_TOKEN"]; got != "secret-266" {
+		t.Fatalf("first cert dns env = %q, want secret-266", got)
+	}
+	if first.Kernel.Egress.EnableDefaultRules == nil || !*first.Kernel.Egress.EnableDefaultRules {
+		t.Fatal("first egress enable_default_rules was not written as true")
+	}
+	if first.Kernel.Egress.PreferIPv4 == nil || !*first.Kernel.Egress.PreferIPv4 {
+		t.Fatal("first egress prefer_ipv4 was not written as true")
+	}
+	if first.Kernel.Egress.SOCKS5.Address != "127.0.0.1" || first.Kernel.Egress.SOCKS5.Port != 1080 {
+		t.Fatalf("first socks5 = %+v", first.Kernel.Egress.SOCKS5)
+	}
+	if first.Kernel.Egress.SOCKS5.Username != "user" || first.Kernel.Egress.SOCKS5.Password != "pass" {
+		t.Fatalf("first socks5 auth = %+v", first.Kernel.Egress.SOCKS5)
+	}
+	if second.Cert.CertMode != "http" || second.Cert.Domain != "next.example.com" || second.Cert.HTTPPort != 80 {
+		t.Fatalf("second cert = %+v", second.Cert)
+	}
+	if second.Kernel.Egress.Shadowsocks.URI != ssURI {
+		t.Fatalf("second shadowsocks URI = %q, want %q", second.Kernel.Egress.Shadowsocks.URI, ssURI)
+	}
+
+	t.Setenv(first.Panel.TokenEnv, "token-266")
+	t.Setenv(second.Panel.TokenEnv, "token-267")
+	loaded, err := config.LoadRoot(configPath)
+	if err != nil {
+		t.Fatalf("LoadRoot generated config: %v", err)
+	}
+	loadedInstances, err := loaded.NormalizeInstances()
+	if err != nil {
+		t.Fatalf("NormalizeInstances generated config: %v", err)
+	}
+	if got := len(loadedInstances); got != 2 {
+		t.Fatalf("loaded instance count = %d, want 2", got)
+	}
+
+	metaData, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read meta: %v", err)
+	}
+	var meta installMeta
+	if err := json.Unmarshal(metaData, &meta); err != nil {
+		t.Fatalf("parse meta: %v\n%s", err, metaData)
+	}
+	if meta.InstanceCount != 2 {
+		t.Fatalf("meta instance count = %d, want 2", meta.InstanceCount)
+	}
+	secondID, err := second.AutoInstanceID()
+	if err != nil {
+		t.Fatalf("second AutoInstanceID: %v", err)
+	}
+	if meta.LatestInstanceID != secondID {
+		t.Fatalf("meta latest instance = %q, want %q", meta.LatestInstanceID, secondID)
+	}
+}
+
+func findInstanceByNodeID(t *testing.T, instances []config.Config, nodeID int) config.Config {
+	t.Helper()
+	for _, inst := range instances {
+		if inst.Panel.NodeID == nodeID {
+			return inst
+		}
+	}
+	t.Fatalf("node %d not found in %+v", nodeID, instances)
+	return config.Config{}
 }

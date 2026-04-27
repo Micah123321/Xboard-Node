@@ -10,10 +10,11 @@
 - `cmd/mi-node` 通过 `config.LoadRoot` / `NormalizeInstances` 启动，兼容 legacy 单节点、`nodes:`、`instances:` 与 machine mode
 - `instances:` 可为每个实例定义独立 panel、kernel、runtime、cert、health/debug 端口；machine mode 使用 `machine.machine_id` + `machine.token_env`
 - 默认配置根路径统一为 `/etc/mi-node`，配置文件为 `/etc/mi-node/config.yml`，凭据文件为 `/etc/mi-node/credentials.env`
+- `install.sh` 通过 `xbctl config init` 生成部署配置；重复安装或迁移多节点时按实例 ID 合并/替换 `instances:`，并合并 `credentials.env`
 - `kernel.egress.socks5` 与 `kernel.egress.shadowsocks` 互斥
 - `kernel.egress.shadowsocks` 支持传统 Shadowsocks 与 `2022-blake3-*`
 - `2022-blake3-*` 出站密码支持单 key 与 `<server_key>:<user_key>` 两种格式
 - 新增最小 `hot-reload` watcher，配置文件变化后仅在新配置可成功 `Load()` 时才触发重启
 - 若变更后的配置非法，watcher 只记录错误并保持当前实例继续运行
 - `cert.http_port` 是 ACME HTTP-01 的本地监听端口；即使改成其他端口，公网校验入口仍然是 `80`
-- `xbctl` 重写 RootConfig 时必须保留实例级 `kernel.egress`，避免增删绑定时丢失 installer 写入的默认出站配置
+- `xbctl` 重写 RootConfig 时必须保留实例级 `kernel.egress`、`cert`、`runtime`、`health_port` 和 `debug_port`，避免安装器或迁移脚本写入的实例配置丢失
