@@ -122,6 +122,29 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/hea
   --egress-socks5-pass your-pass
 ```
 
+如果节点已经部署完成，只想给某个已存在节点添加或切换默认落地，不需要重新传面板 token：
+
+```bash
+# 查看所有节点当前默认出站
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/install.sh) egress list
+
+# 给 node_id=322 设置 SOCKS5 落地
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/install.sh) egress set \
+  --node-id 322 \
+  --socks5-url 'socks5://your-user:your-pass@127.0.0.1:1080'
+
+# 切换为传统 SS / SS2022 落地
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/install.sh) egress set \
+  --node-id 322 \
+  --shadowsocks-uri 'ss://...'
+
+# 清除该节点默认上游落地，恢复 direct 默认出站
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/install.sh) egress clear \
+  --node-id 322
+```
+
+`egress set/clear` 默认会重启 `mi-node.service` 让配置立即生效；如果只想写配置不重启，可以追加 `--no-restart`。SOCKS5 URL 里的特殊字符需要 URL 编码，例如密码里有 `@` 时写成 `%40`。
+
 如果默认出站需要走传统 Shadowsocks：
 
 ```bash
@@ -172,7 +195,7 @@ xbctl service logs
 bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/scripts/migrate-to-mi-node.sh)
 ```
 
-它会在目标机器上自动读取旧配置中的 `panel.url / token / node_id / cert.* / runtime.*`，再调用当前仓库的 `mi-node install.sh` 完成切换。迁移成功后统一由 `mi-node.service` 管理；单机多节点 `--all` 会合并到 `/etc/mi-node/config.yml` 的 `instances:`，不会为每个节点继续创建 `mi-node@<id>`。
+它会在目标机器上自动读取旧配置中的 `panel.url / token / node_id / cert.* / runtime.* / kernel.egress.*`，再调用当前仓库的 `mi-node install.sh` 完成切换。迁移成功后统一由 `mi-node.service` 管理；单机多节点 `--all` 会合并到 `/etc/mi-node/config.yml` 的 `instances:`，不会为每个节点继续创建 `mi-node@<id>`。
 
 常见用法：
 

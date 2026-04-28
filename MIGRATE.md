@@ -38,6 +38,8 @@ https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/scripts/mig
   - `cert.dns_env`
   - `runtime.gomemlimit`
   - `runtime.gogc`
+  - `kernel.egress.socks5`
+  - `kernel.egress.shadowsocks.uri`
 - 迁移前自动备份旧配置和相关 service 定义
 - 停掉旧 `xboard-node` / 旧模板 `mi-node@<id>` 服务，避免端口冲突
 - 用识别出的参数重新执行 `mi-node` 的 `install.sh`
@@ -143,6 +145,36 @@ systemctl list-units 'mi-node@*.service' --state=active --no-legend --no-pager \
   | awk '{print $1}' \
   | xargs -r systemctl restart
 ```
+
+## 迁移后补充或切换落地
+
+迁移后如果某个节点需要补回或切换默认落地，可以直接用远程一键入口，不需要重新安装节点：
+
+```bash
+# 查看所有节点当前默认出站
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/install.sh) egress list
+
+# 给 node_id=322 设置 SOCKS5 落地
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/install.sh) egress set \
+  --node-id 322 \
+  --socks5-url 'socks5://USER:PASSWORD@HOST:PORT'
+
+# 如果密码里有 @，在 socks5:// URL 里写成 %40
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/install.sh) egress set \
+  --node-id 322 \
+  --socks5-url 'socks5://USER:PASS%40WORD@HOST:PORT'
+
+# 切换为传统 SS / SS2022 落地
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/install.sh) egress set \
+  --node-id 322 \
+  --shadowsocks-uri 'ss://...'
+
+# 清除默认上游落地
+bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/heads/dev/install.sh) egress clear \
+  --node-id 322
+```
+
+默认会重启 `mi-node.service` 让配置立即生效；只写配置不重启时追加 `--no-restart`。
 
 ## 建议执行顺序
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -219,6 +220,151 @@ func TestRunConfigInitMergesInstancesAndPreservesInstallOptions(t *testing.T) {
 	}
 }
 
+func TestRunEgressSetListClear(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	metaPath := filepath.Join(dir, "install-meta.json")
+
+	root := &config.RootConfig{
+		Instances: []config.Config{
+			testNodeConfig("http://panel.example.com", 266),
+			testNodeConfig("http://panel.example.com", 322),
+		},
+	}
+	if err := writeRootConfig(configPath, root); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	socksURL := "socks5://admin:%40secret@198.51.100.10:30601"
+	if err := runEgress([]string{
+		"set",
+		"--config", configPath,
+		"--meta", metaPath,
+		"--node-id", "322",
+		"--socks5-url", socksURL,
+		"--no-restart",
+	}); err != nil {
+		t.Fatalf("egress set socks5: %v", err)
+	}
+
+	updated := loadTestInstances(t, configPath)
+	node322 := findInstanceByNodeID(t, updated, 322)
+	if node322.Kernel.Egress.SOCKS5.Address != "198.51.100.10" {
+		t.Fatalf("socks5 address = %q", node322.Kernel.Egress.SOCKS5.Address)
+	}
+	if node322.Kernel.Egress.SOCKS5.Port != 30601 {
+		t.Fatalf("socks5 port = %d", node322.Kernel.Egress.SOCKS5.Port)
+	}
+	if node322.Kernel.Egress.SOCKS5.Username != "admin" {
+		t.Fatalf("socks5 username = %q", node322.Kernel.Egress.SOCKS5.Username)
+	}
+	if node322.Kernel.Egress.SOCKS5.Password != "@secret" {
+		t.Fatalf("socks5 password was not URL-decoded: %q", node322.Kernel.Egress.SOCKS5.Password)
+	}
+
+	listOutput := captureStdout(t, func() error {
+		return runEgress([]string{"list", "--config", configPath})
+	})
+	if !strings.Contains(listOutput, "socks5") || !strings.Contains(listOutput, "198.51.100.10:30601") {
+		t.Fatalf("list output missing socks5 summary:\n%s", listOutput)
+	}
+	if strings.Contains(listOutput, "@secret") || strings.Contains(listOutput, "admin:") {
+		t.Fatalf("list output leaked credentials:\n%s", listOutput)
+	}
+
+	ssURI := "ss://YWVzLTEyOC1nY206eW91ci1wYXNzd29yZA==@203.0.113.10:8388"
+	if err := runEgress([]string{
+		"set",
+		"--config", configPath,
+		"--meta", metaPath,
+		"--node-id", "322",
+		"--shadowsocks-uri", ssURI,
+		"--no-restart",
+	}); err != nil {
+		t.Fatalf("egress set shadowsocks: %v", err)
+	}
+	updated = loadTestInstances(t, configPath)
+	node322 = findInstanceByNodeID(t, updated, 322)
+	if node322.Kernel.Egress.SOCKS5.Address != "" || node322.Kernel.Egress.SOCKS5.Port != 0 {
+		t.Fatalf("socks5 was not cleared after shadowsocks switch: %+v", node322.Kernel.Egress.SOCKS5)
+	}
+	if node322.Kernel.Egress.Shadowsocks.URI != ssURI {
+		t.Fatalf("shadowsocks uri = %q", node322.Kernel.Egress.Shadowsocks.URI)
+	}
+
+	listOutput = captureStdout(t, func() error {
+		return runEgress([]string{"list", "--config", configPath})
+	})
+	if strings.Contains(listOutput, "YWVzLTEyOC1nY206eW91ci1wYXNzd29yZA==") {
+		t.Fatalf("list output leaked shadowsocks credentials:\n%s", listOutput)
+	}
+	if !strings.Contains(listOutput, "203.0.113.10:8388") {
+		t.Fatalf("list output missing sanitized shadowsocks upstream:\n%s", listOutput)
+	}
+
+	if err := runEgress([]string{
+		"clear",
+		"--config", configPath,
+		"--meta", metaPath,
+		"--node-id", "322",
+		"--no-restart",
+	}); err != nil {
+		t.Fatalf("egress clear: %v", err)
+	}
+	updated = loadTestInstances(t, configPath)
+	node322 = findInstanceByNodeID(t, updated, 322)
+	if node322.Kernel.Egress.SOCKS5.Address != "" || node322.Kernel.Egress.Shadowsocks.URI != "" {
+		t.Fatalf("egress was not cleared: %+v", node322.Kernel.Egress)
+	}
+}
+
+func TestRunEgressRequiresUniqueTarget(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yml")
+	metaPath := filepath.Join(dir, "install-meta.json")
+	root := &config.RootConfig{
+		Instances: []config.Config{
+			testNodeConfig("http://panel-a.example.com", 322),
+			testNodeConfig("http://panel-b.example.com", 322),
+		},
+	}
+	if err := writeRootConfig(configPath, root); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	err := runEgress([]string{
+		"set",
+		"--config", configPath,
+		"--meta", metaPath,
+		"--node-id", "322",
+		"--socks5", "127.0.0.1:1080",
+		"--no-restart",
+	})
+	if err == nil {
+		t.Fatal("expected ambiguous node_id to fail")
+	}
+	if !strings.Contains(err.Error(), "multiple instances matched") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := runEgress([]string{
+		"set",
+		"--config", configPath,
+		"--meta", metaPath,
+		"--panel-url", "http://panel-b.example.com",
+		"--node-id", "322",
+		"--socks5", "127.0.0.1:1080",
+		"--no-restart",
+	}); err != nil {
+		t.Fatalf("egress set with panel disambiguation: %v", err)
+	}
+	updated := loadTestInstances(t, configPath)
+	node322PanelB := findInstanceByPanelAndNodeID(t, updated, "http://panel-b.example.com", 322)
+	if node322PanelB.Kernel.Egress.SOCKS5.Address != "127.0.0.1" {
+		t.Fatalf("panel-b socks5 address = %q", node322PanelB.Kernel.Egress.SOCKS5.Address)
+	}
+}
+
 func findInstanceByNodeID(t *testing.T, instances []config.Config, nodeID int) config.Config {
 	t.Helper()
 	for _, inst := range instances {
@@ -228,4 +374,60 @@ func findInstanceByNodeID(t *testing.T, instances []config.Config, nodeID int) c
 	}
 	t.Fatalf("node %d not found in %+v", nodeID, instances)
 	return config.Config{}
+}
+
+func findInstanceByPanelAndNodeID(t *testing.T, instances []config.Config, panel string, nodeID int) config.Config {
+	t.Helper()
+	for _, inst := range instances {
+		if inst.Panel.URL == panel && inst.Panel.NodeID == nodeID {
+			return inst
+		}
+	}
+	t.Fatalf("panel %s node %d not found in %+v", panel, nodeID, instances)
+	return config.Config{}
+}
+
+func testNodeConfig(panelURL string, nodeID int) config.Config {
+	return config.Config{
+		Panel: config.PanelConfig{
+			URL:      panelURL,
+			TokenEnv: "TOKEN_ENV",
+			NodeID:   nodeID,
+		},
+		Kernel: config.KernelConfig{
+			Type:      "singbox",
+			ConfigDir: "/etc/mi-node",
+		},
+		Log: config.LogConfig{Level: "info", Output: "stdout"},
+	}
+}
+
+func loadTestInstances(t *testing.T, path string) []config.Config {
+	t.Helper()
+	root, err := loadWritableRootConfig(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	return normalizeRootInstances(root)
+}
+
+func captureStdout(t *testing.T, fn func() error) string {
+	t.Helper()
+	original := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = w
+	runErr := fn()
+	_ = w.Close()
+	os.Stdout = original
+	data, readErr := io.ReadAll(r)
+	if readErr != nil {
+		t.Fatalf("read stdout: %v", readErr)
+	}
+	if runErr != nil {
+		t.Fatalf("captured function failed: %v", runErr)
+	}
+	return string(data)
 }

@@ -8,6 +8,14 @@
   - 类型: 快速修改（无方案包）
   - 文件: install.sh, scripts/migrate-to-mi-node.sh, cmd/xbctl/main.go, cmd/xbctl/main_test.go, MIGRATE.md, README.md
 
+- **[migrate/egress]**: `migrate-to-mi-node.sh` 迁移旧配置时会同步 `kernel.egress.socks5` 和 `kernel.egress.shadowsocks.uri`；SOCKS5 同时支持结构化 `address/port/username/password` 与 `socks5://user:pass@host:port` 写法，并在迁移日志中脱敏认证信息。 — by yinjianm
+  - 类型: 快速修改（无方案包）
+  - 文件: scripts/migrate-to-mi-node.sh, MIGRATE.md, README.md
+
+- **[xbctl/install/egress]**: 新增已部署节点默认落地管理能力：`xbctl egress list/set/clear` 与 `install.sh egress ...` 远程入口可按 `node_id` 或 `instance_id` 给现有实例添加、切换或清除 SOCKS5 / 传统 SS / SS2022 默认出站，默认重启 `mi-node.service`，并支持 `--no-restart`。 — by yinjianm
+  - 方案: [202604281350_egress-management](archive/2026-04/202604281350_egress-management/)
+  - 决策: egress-management#D001(以 xbctl 作为唯一配置修改入口)
+
 ## [0.0.5] - 2026-04-28
 
 ### 修复

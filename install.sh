@@ -7,6 +7,7 @@ set -euo pipefail
 #   install   Configure /etc/mi-node/config.yml and start mi-node.service
 #   status    Show service, binary, config and health status
 #   upgrade   Replace mi-node/xbctl binaries and restart the service when active
+#   egress    Manage default upstream egress for an existing instance
 #   uninstall Stop service and remove binaries; config is kept unless --purge is set
 
 RED='\033[0;31m'
@@ -75,6 +76,7 @@ CURRENT_STATE="fresh"
 SERVICE_WAS_ACTIVE=0
 HAVE_XBCTL=0
 REMOVE_ARGS=()
+EGRESS_ARGS=()
 
 log_info() { echo -e "${GREEN}[INFO]${NC} $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
@@ -97,6 +99,9 @@ mi-node 原生部署脚本
   bash install.sh install --mode machine -a <panel_url> -t <token> --machine-id <id> [选项]
   bash install.sh status
   bash install.sh upgrade [--version <tag>|--binary-url <url>|--xbctl-url <url>]
+  bash install.sh egress list
+  bash install.sh egress set --node-id <id> (--socks5-url <url>|--socks5 <host:port>|--shadowsocks-uri <ss://...>) [--no-restart]
+  bash install.sh egress clear --node-id <id> [--no-restart]
   bash install.sh uninstall [--purge] [--yes]
 
 常用参数:
@@ -141,9 +146,11 @@ mi-node 原生部署脚本
 管理:
   bash install.sh status
   bash install.sh upgrade
+  bash install.sh egress list
   bash install.sh uninstall
   xbctl status
   xbctl list
+  xbctl egress list
   xbctl service logs
 HELP
 }
@@ -162,6 +169,12 @@ parse_args() {
                 ACTION="$1"
                 [ "$ACTION" = "update" ] && ACTION="upgrade"
                 shift
+                ;;
+            egress)
+                ACTION="egress"
+                shift
+                EGRESS_ARGS=("$@")
+                break
                 ;;
             remove)
                 ACTION="remove"
@@ -934,6 +947,30 @@ perform_remove() {
     exit 1
 }
 
+perform_egress() {
+    if [ "${#EGRESS_ARGS[@]}" -eq 0 ]; then
+        log_error "用法: bash install.sh egress <list|set|clear> [参数]"
+        exit 1
+    fi
+    check_root
+    ensure_systemd
+    detect_arch
+    detect_current_state
+    ensure_dirs
+    TMP_DIR="$(mktemp -d)"
+    stage_xbctl
+    install -m 755 "${TMP_DIR}/xbctl" "${CLI_PATH}"
+    ln -sf "${CLI_PATH}" /usr/bin/xbctl 2>/dev/null || true
+
+    case "${EGRESS_ARGS[0]}" in
+        set|clear)
+            backup_existing_state
+            ;;
+    esac
+
+    "${CLI_PATH}" egress "${EGRESS_ARGS[@]}"
+}
+
 main() {
     parse_args "$@"
     case "${ACTION}" in
@@ -957,6 +994,9 @@ main() {
             ;;
         remove)
             perform_remove
+            ;;
+        egress)
+            perform_egress
             ;;
         *)
             log_error "未知命令: ${ACTION}"

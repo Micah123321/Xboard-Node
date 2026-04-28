@@ -170,6 +170,8 @@ func run(args []string) error {
 		return runHealth()
 	case "bind":
 		return runBind(args[1:])
+	case "egress":
+		return runEgress(args[1:])
 	case "bind-node":
 		return runBind(append([]string{"add-node"}, args[1:]...))
 	case "bind-machine":
@@ -213,6 +215,9 @@ func printUsage() {
   xbctl bind remove <instance-id>
   xbctl bind remove-node --panel URL --node-id ID
   xbctl bind remove-machine --panel URL --machine-id ID
+  xbctl egress list [--output text|json]
+  xbctl egress set --node-id ID (--socks5-url URL | --socks5 HOST:PORT | --shadowsocks-uri URI) [--no-restart]
+  xbctl egress clear --node-id ID [--no-restart]
   xbctl upgrade [--version VERSION]
   xbctl uninstall [--purge] [--yes]
   xbctl version

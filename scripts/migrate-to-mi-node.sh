@@ -183,8 +183,184 @@ yaml_get_cert_dns_env() {
     ' "$file"
 }
 
+yaml_get_kernel_egress_value() {
+    local file="$1"
+    local section="$2"
+    local key="$3"
+    awk -v section="$section" -v key="$key" '
+        function indent_len(line,    n, c) {
+            n = 0
+            for (c = 1; c <= length(line); c++) {
+                if (substr(line, c, 1) == " ") {
+                    n++
+                } else {
+                    break
+                }
+            }
+            return n
+        }
+        BEGIN {
+            in_kernel = 0
+            kernel_indent = -1
+            in_egress = 0
+            egress_indent = -1
+            in_section = 0
+            section_indent = -1
+        }
+        {
+            line = $0
+            if (line ~ "^kernel:[[:space:]]*$") {
+                in_kernel = 1
+                kernel_indent = indent_len(line)
+                in_egress = 0
+                in_section = 0
+                next
+            }
+            if (in_kernel) {
+                if (line ~ /^[[:space:]]*$/) {
+                    next
+                }
+                current_indent = indent_len(line)
+                if (current_indent <= kernel_indent) {
+                    exit
+                }
+                if (line ~ "^[[:space:]]*egress:[[:space:]]*$") {
+                    in_egress = 1
+                    egress_indent = current_indent
+                    in_section = 0
+                    next
+                }
+                if (in_egress) {
+                    if (current_indent <= egress_indent) {
+                        in_egress = 0
+                        in_section = 0
+                    }
+                    if (in_egress && line ~ "^[[:space:]]*" section ":[[:space:]]*$") {
+                        in_section = 1
+                        section_indent = current_indent
+                        next
+                    }
+                    if (in_section) {
+                        if (current_indent <= section_indent) {
+                            in_section = 0
+                        } else if (line ~ "^[[:space:]]*" key ":[[:space:]]*") {
+                            sub("^[[:space:]]*" key ":[[:space:]]*", "", line)
+                            print line
+                            exit
+                        }
+                    }
+                }
+            }
+        }
+    ' "$file"
+}
+
+yaml_get_kernel_egress_scalar() {
+    local file="$1"
+    local section="$2"
+    awk -v section="$section" '
+        function indent_len(line,    n, c) {
+            n = 0
+            for (c = 1; c <= length(line); c++) {
+                if (substr(line, c, 1) == " ") {
+                    n++
+                } else {
+                    break
+                }
+            }
+            return n
+        }
+        BEGIN {
+            in_kernel = 0
+            kernel_indent = -1
+            in_egress = 0
+            egress_indent = -1
+        }
+        {
+            line = $0
+            if (line ~ "^kernel:[[:space:]]*$") {
+                in_kernel = 1
+                kernel_indent = indent_len(line)
+                in_egress = 0
+                next
+            }
+            if (in_kernel) {
+                if (line ~ /^[[:space:]]*$/) {
+                    next
+                }
+                current_indent = indent_len(line)
+                if (current_indent <= kernel_indent) {
+                    exit
+                }
+                if (line ~ "^[[:space:]]*egress:[[:space:]]*$") {
+                    in_egress = 1
+                    egress_indent = current_indent
+                    next
+                }
+                if (in_egress) {
+                    if (current_indent <= egress_indent) {
+                        exit
+                    }
+                    if (line ~ "^[[:space:]]*" section ":[[:space:]]*[^[:space:]].*") {
+                        sub("^[[:space:]]*" section ":[[:space:]]*", "", line)
+                        print line
+                        exit
+                    }
+                }
+            }
+        }
+    ' "$file"
+}
+
 normalize_scalar() {
     unquote "$1"
+}
+
+url_decode() {
+    local value="${1//+/ }"
+    printf '%b' "${value//%/\\x}"
+}
+
+parse_socks5_uri() {
+    local uri="$1"
+    local rest auth hostport host port user pass
+    [[ "$uri" == socks5://* || "$uri" == socks://* ]] || return 1
+    rest="${uri#*://}"
+    rest="${rest%%/*}"
+    rest="${rest%%\?*}"
+
+    if [[ "$rest" == *"@"* ]]; then
+        auth="${rest%@*}"
+        hostport="${rest##*@}"
+        if [[ "$auth" == *:* ]]; then
+            user="${auth%%:*}"
+            pass="${auth#*:}"
+        else
+            user="$auth"
+            pass=""
+        fi
+        user="$(url_decode "$user")"
+        pass="$(url_decode "$pass")"
+    else
+        hostport="$rest"
+        user=""
+        pass=""
+    fi
+
+    if [[ "$hostport" =~ ^\[([^]]+)\]:([0-9]+)$ ]]; then
+        host="${BASH_REMATCH[1]}"
+        port="${BASH_REMATCH[2]}"
+    elif [[ "$hostport" =~ ^([^:]+):([0-9]+)$ ]]; then
+        host="${BASH_REMATCH[1]}"
+        port="${BASH_REMATCH[2]}"
+    else
+        return 1
+    fi
+
+    SOCKS5_HOST="$host"
+    SOCKS5_PORT="$port"
+    SOCKS5_USER="$user"
+    SOCKS5_PASS="$pass"
 }
 
 find_candidate_configs() {
@@ -274,6 +450,13 @@ migrate_one() {
     local cert_http_port
     local gomemlimit
     local gogc
+    local egress_socks5_scalar
+    local SOCKS5_HOST
+    local SOCKS5_PORT
+    local SOCKS5_USER
+    local SOCKS5_PASS
+    local socks5_endpoint
+    local egress_shadowsocks_uri
     local backup_root
     local -a dns_envs=()
     local -a args=()
@@ -295,6 +478,19 @@ migrate_one() {
     cert_http_port="$(normalize_scalar "$(yaml_get_section_value "$cfg" cert http_port)")"
     gomemlimit="$(normalize_scalar "$(yaml_get_section_value "$cfg" runtime gomemlimit)")"
     gogc="$(normalize_scalar "$(yaml_get_section_value "$cfg" runtime gogc)")"
+    egress_socks5_scalar="$(normalize_scalar "$(yaml_get_kernel_egress_scalar "$cfg" socks5)")"
+    SOCKS5_HOST="$(normalize_scalar "$(yaml_get_kernel_egress_value "$cfg" socks5 address)")"
+    SOCKS5_PORT="$(normalize_scalar "$(yaml_get_kernel_egress_value "$cfg" socks5 port)")"
+    SOCKS5_USER="$(normalize_scalar "$(yaml_get_kernel_egress_value "$cfg" socks5 username)")"
+    SOCKS5_PASS="$(normalize_scalar "$(yaml_get_kernel_egress_value "$cfg" socks5 password)")"
+    egress_shadowsocks_uri="$(normalize_scalar "$(yaml_get_kernel_egress_value "$cfg" shadowsocks uri)")"
+
+    if [[ -n "$egress_socks5_scalar" ]]; then
+        if ! parse_socks5_uri "$egress_socks5_scalar"; then
+            err "无法解析 kernel.egress.socks5: $cfg"
+            return 1
+        fi
+    fi
 
     mapfile -t dns_envs < <(yaml_get_cert_dns_env "$cfg")
 
@@ -310,6 +506,17 @@ migrate_one() {
     log "证书模式: ${cert_mode:-none}"
     if [[ -n "$cert_domain" ]]; then
         log "证书域名: ${cert_domain}"
+    fi
+    if [[ -n "$SOCKS5_HOST" || -n "$egress_shadowsocks_uri" ]]; then
+        if [[ -n "$SOCKS5_HOST" ]]; then
+            if [[ -n "$SOCKS5_USER" || -n "$SOCKS5_PASS" ]]; then
+                log "默认出站: SOCKS5 ${SOCKS5_HOST}:${SOCKS5_PORT} (带认证)"
+            else
+                log "默认出站: SOCKS5 ${SOCKS5_HOST}:${SOCKS5_PORT}"
+            fi
+        else
+            log "默认出站: Shadowsocks URI"
+        fi
     fi
 
     args=(--yes -a "$panel_url" -t "$panel_token" -n "$node_id")
@@ -341,6 +548,32 @@ migrate_one() {
     for item in "${dns_envs[@]}"; do
         args+=(--cert-dns-env "$item")
     done
+    if [[ -n "$SOCKS5_HOST" || -n "$SOCKS5_PORT" || -n "$SOCKS5_USER" || -n "$SOCKS5_PASS" ]]; then
+        if [[ -z "$SOCKS5_HOST" || -z "$SOCKS5_PORT" ]]; then
+            err "SOCKS5 出站配置缺少 address/port: $cfg"
+            return 1
+        fi
+        if [[ "$SOCKS5_HOST" == *:* ]]; then
+            socks5_endpoint="[${SOCKS5_HOST}]:${SOCKS5_PORT}"
+        else
+            socks5_endpoint="${SOCKS5_HOST}:${SOCKS5_PORT}"
+        fi
+        args+=(--egress-socks5 "$socks5_endpoint")
+        if [[ -n "$SOCKS5_USER" || -n "$SOCKS5_PASS" ]]; then
+            if [[ -z "$SOCKS5_USER" || -z "$SOCKS5_PASS" ]]; then
+                err "SOCKS5 出站认证必须同时包含 username/password: $cfg"
+                return 1
+            fi
+            args+=(--egress-socks5-user "$SOCKS5_USER" --egress-socks5-pass "$SOCKS5_PASS")
+        fi
+    fi
+    if [[ -n "$egress_shadowsocks_uri" ]]; then
+        if [[ -n "$SOCKS5_HOST" || -n "$SOCKS5_PORT" ]]; then
+            err "SOCKS5 和 Shadowsocks 默认出站只能二选一: $cfg"
+            return 1
+        fi
+        args+=(--egress-shadowsocks-uri "$egress_shadowsocks_uri")
+    fi
 
     if [[ "$DRY_RUN" -eq 1 ]]; then
         printf '[migrate][dry-run] bash <(curl -fsSL %s)' "$(shell_quote "$RAW_URL")"
