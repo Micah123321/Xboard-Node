@@ -11,6 +11,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -30,6 +31,7 @@ import (
 	"github.com/micah123321/mi-node/internal/monitor"
 	"github.com/micah123321/mi-node/internal/nlog"
 	"github.com/micah123321/mi-node/internal/tracker"
+	"github.com/micah123321/mi-node/internal/trafficlimit"
 )
 
 type Service struct {
@@ -38,6 +40,7 @@ type Service struct {
 	sink         controlplane.Sink
 	kernel       kernel.Kernel
 	tracker      *tracker.Tracker
+	trafficLimit *trafficlimit.Manager
 	limiter      *limiter.Limiter
 	speedTracker *limiter.SpeedTracker
 	cert         *cert.Manager
@@ -171,6 +174,7 @@ func newService(cfg *config.Config, cp controlplane.ControlPlane) *Service {
 		sink:         cp,
 		kernel:       k,
 		tracker:      tracker.New(),
+		trafficLimit: trafficlimit.New(filepath.Join(cfg.Kernel.ConfigDir, "traffic-limit-state.json"), time.Now),
 		limiter:      l,
 		speedTracker: st,
 		cert:         certMgr,
@@ -313,6 +317,7 @@ func (s *Service) initialSetup(ctx context.Context) error {
 	s.lastConfig = bootstrap.Config
 	s.metricsMu.Unlock()
 	s.lastConfigHash = computeConfigHash(bootstrap.Config)
+	s.configureTrafficLimit(bootstrap.Config)
 	s.updateUserState(bootstrap.Users)
 
 	nlog.Core().Info("initial snapshot ready",
@@ -328,6 +333,11 @@ func (s *Service) initialSetup(ctx context.Context) error {
 	}
 
 	s.applyRemoteOverrides(ctx, bootstrap.Config)
+	if s.trafficLimit != nil && !s.trafficLimit.CanRun() {
+		nlog.Core().Warn("kernel start skipped by node traffic limit")
+		s.markMailboxReadyAndDrain(ctx)
+		return nil
+	}
 	if !s.startKernel(bootstrap.Config, bootstrap.Users) {
 		return fmt.Errorf("start kernel")
 	}
@@ -363,6 +373,51 @@ func (s *Service) applyRemoteOverrides(ctx context.Context, nc *model.NodeSpec) 
 	}
 
 	return false
+}
+
+func (s *Service) configureTrafficLimit(nc *model.NodeSpec) {
+	if s.trafficLimit == nil || nc == nil {
+		return
+	}
+	action, err := s.trafficLimit.Configure(trafficLimitConfigFromSpec(nc.TrafficLimit))
+	if err != nil {
+		nlog.Core().Warn("traffic limit state update failed", "error", err)
+		return
+	}
+	s.handleTrafficLimitAction(action)
+}
+
+func (s *Service) handleTrafficLimitAction(action trafficlimit.Action) {
+	switch action {
+	case trafficlimit.ActionSuspend:
+		if s.kernel.IsRunning() {
+			nlog.Core().Warn("stopping kernel because node traffic limit was reached")
+			s.kernel.Stop()
+		}
+	case trafficlimit.ActionResume:
+		nlog.Core().Info("node traffic limit reset, attempting to resume kernel")
+		if !s.kernel.IsRunning() && s.lastConfig != nil && len(s.lastUsers) > 0 {
+			s.startKernel(s.lastConfig, s.lastUsers)
+		}
+	}
+}
+
+func trafficLimitConfigFromSpec(spec *model.TrafficLimitSpec) trafficlimit.Config {
+	if spec == nil {
+		return trafficlimit.Config{}
+	}
+	return trafficlimit.Config{
+		Enabled:     spec.Enabled,
+		Limit:       spec.Limit,
+		ResetDay:    spec.ResetDay,
+		ResetTime:   spec.ResetTime,
+		Timezone:    spec.Timezone,
+		CurrentUsed: spec.CurrentUsed,
+		LastResetAt: spec.LastResetAt,
+		NextResetAt: spec.NextResetAt,
+		SuspendedAt: spec.SuspendedAt,
+		Status:      spec.Status,
+	}
 }
 
 // applyPanelCert converts a panel CertConfig into the local config format and
@@ -692,6 +747,7 @@ func (s *Service) handleWSEvent(ctx context.Context, event controlplane.Event) {
 		s.lastConfig = event.Config
 		s.metricsMu.Unlock()
 		s.lastConfigHash = newConfigHash
+		s.configureTrafficLimit(event.Config)
 		s.applyRemoteOverrides(ctx, event.Config)
 		s.applyChanges(ctx, true, false)
 
@@ -847,6 +903,7 @@ func (s *Service) applyPullResult(ctx context.Context, result pullResult) {
 			s.lastConfig = result.config
 			s.metricsMu.Unlock()
 			s.lastConfigHash = result.configHash
+			s.configureTrafficLimit(result.config)
 			if s.applyRemoteOverrides(ctx, result.config) {
 				configChanged = true
 			}
@@ -912,6 +969,11 @@ func (s *Service) restoreUserState(users []model.UserSpec, hash string) {
 // startKernel starts (or restarts) the kernel with the given config/users and
 // records the successfully applied state. Returns false on error.
 func (s *Service) startKernel(nc *model.NodeSpec, users []model.UserSpec) bool {
+	if s.trafficLimit != nil && !s.trafficLimit.CanRun() {
+		nlog.Core().Warn("kernel start blocked by node traffic limit")
+		return false
+	}
+
 	if err := s.ensureTLSCertificate(context.Background(), nc); err != nil {
 		slog.Error("failed to prepare TLS certificate", "error", err)
 		return false
@@ -942,10 +1004,17 @@ func (s *Service) ensureRunning() bool {
 	if s.kernel.IsRunning() {
 		return true
 	}
+	if s.trafficLimit != nil && !s.trafficLimit.CanRun() {
+		return false
+	}
 	if len(s.lastUsers) > 0 && s.lastConfig != nil {
 		return s.startKernel(s.lastConfig, s.lastUsers)
 	}
 	return false
+}
+
+func (s *Service) trafficLimitBlocksRun() bool {
+	return s.trafficLimit != nil && !s.trafficLimit.CanRun()
 }
 
 // ─── User update entry points ───────────────────────────────────────────────
@@ -953,6 +1022,14 @@ func (s *Service) ensureRunning() bool {
 // applyUserUpdate replaces the full user set and hot-swaps the kernel.
 // Called from WS sync.users and REST polling.
 func (s *Service) applyUserUpdate(ctx context.Context, users []model.UserSpec, newHash string) {
+	if s.trafficLimitBlocksRun() {
+		s.updateUserState(users)
+		if newHash != "" {
+			s.lastUserHash = newHash
+		}
+		return
+	}
+
 	if !s.ensureRunning() {
 		return
 	}
@@ -984,6 +1061,11 @@ func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers 
 			return
 		}
 		merged := mergeUsers(s.lastUsers, deltaUsers)
+
+		if s.trafficLimitBlocksRun() {
+			s.updateUserState(merged)
+			return
+		}
 
 		if !s.ensureRunning() {
 			return
@@ -1018,6 +1100,11 @@ func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers 
 			return
 		}
 		filtered := subtractUsers(s.lastUsers, deltaUsers)
+
+		if s.trafficLimitBlocksRun() {
+			s.updateUserState(filtered)
+			return
+		}
 
 		if !s.kernel.IsRunning() {
 			return
@@ -1125,6 +1212,14 @@ func (s *Service) applyChanges(ctx context.Context, configChanged, usersChanged 
 }
 
 func (s *Service) trackAndEnforce(ctx context.Context) {
+	if s.trafficLimit != nil {
+		action, err := s.trafficLimit.CheckReset()
+		if err != nil {
+			nlog.Core().Warn("traffic limit reset check failed", "error", err)
+		}
+		s.handleTrafficLimitAction(action)
+	}
+
 	if !s.kernel.IsRunning() {
 		return
 	}
@@ -1135,7 +1230,14 @@ func (s *Service) trackAndEnforce(ctx context.Context) {
 		return
 	}
 
-	s.tracker.Process(traffic, aliveIPs, connCount)
+	uploadDelta, downloadDelta := s.tracker.Process(traffic, aliveIPs, connCount)
+	if s.trafficLimit != nil {
+		action, err := s.trafficLimit.AddTraffic(uploadDelta, downloadDelta)
+		if err != nil {
+			nlog.Core().Warn("traffic limit update failed", "error", err)
+		}
+		s.handleTrafficLimitAction(action)
+	}
 
 	// Only log stats if there's actual traffic or connections
 	if connCount > 0 || len(traffic) > 0 {
@@ -1273,6 +1375,9 @@ func (s *Service) buildMetrics(status monitor.Status) map[string]interface{} {
 	m["limits"] = map[string]interface{}{
 		"device_limit_events": lm.DeviceLimitEvents,
 		"speed_limited_users": s.speedTracker.LimitedUserCount(),
+	}
+	if s.trafficLimit != nil {
+		m["traffic_limit"] = s.trafficLimit.Snapshot()
 	}
 
 	return m

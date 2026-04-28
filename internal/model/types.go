@@ -45,6 +45,7 @@ type NodeSpec struct {
 
 	Multiplex           *MultiplexConfig
 	AcceptProxyProtocol bool
+	TrafficLimit        *TrafficLimitSpec
 }
 
 type OutboundConfig struct {
@@ -75,6 +76,19 @@ type BrutalConfig struct {
 	Enabled  bool
 	UpMbps   int
 	DownMbps int
+}
+
+type TrafficLimitSpec struct {
+	Enabled     bool
+	Limit       int64
+	ResetDay    int
+	ResetTime   string
+	Timezone    string
+	CurrentUsed int64
+	LastResetAt int64
+	NextResetAt int64
+	SuspendedAt int64
+	Status      string
 }
 
 type UserSpec struct {

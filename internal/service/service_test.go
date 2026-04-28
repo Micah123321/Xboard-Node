@@ -5,10 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/micah123321/mi-node/internal/cert"
 	"github.com/micah123321/mi-node/internal/config"
+	"github.com/micah123321/mi-node/internal/limiter"
 	"github.com/micah123321/mi-node/internal/model"
+	"github.com/micah123321/mi-node/internal/trafficlimit"
 )
 
 func TestEnsureTLSCertificateAutoSelfSigned(t *testing.T) {
@@ -102,5 +105,85 @@ func TestCertFilesAvailable(t *testing.T) {
 
 	if !certFilesAvailable(certPath, keyPath) {
 		t.Fatal("expected true when both files exist")
+	}
+}
+
+func TestApplyUserUpdateCachesUsersWhenTrafficLimitSuspended(t *testing.T) {
+	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	manager := trafficlimit.New("", func() time.Time { return now })
+	if action, err := manager.Configure(trafficlimit.Config{
+		Enabled:     true,
+		Limit:       100,
+		CurrentUsed: 100,
+		ResetDay:    1,
+		ResetTime:   "00:00",
+		Timezone:    "UTC",
+	}); err != nil || action != trafficlimit.ActionSuspend {
+		t.Fatalf("Configure() action = %v error = %v, want suspend without error", action, err)
+	}
+
+	l := limiter.New()
+	fakeKernel := &fakeDebugKernel{}
+	svc := &Service{
+		kernel:       fakeKernel,
+		trafficLimit: manager,
+		limiter:      l,
+		speedTracker: limiter.NewSpeedTracker(l),
+		lastConfig:   &model.NodeSpec{Protocol: "shadowsocks", ServerPort: 12345},
+		lastUsers:    []model.UserSpec{{ID: 1, UUID: "old"}},
+	}
+
+	svc.applyUserUpdate(context.Background(), []model.UserSpec{{ID: 2, UUID: "new"}}, "hash-from-panel")
+
+	if fakeKernel.startCalls != 0 || fakeKernel.updateCalls != 0 {
+		t.Fatalf("kernel calls while suspended: start=%d update=%d, want 0", fakeKernel.startCalls, fakeKernel.updateCalls)
+	}
+	if len(svc.lastUsers) != 1 || svc.lastUsers[0].ID != 2 || svc.lastUsers[0].UUID != "new" {
+		t.Fatalf("lastUsers = %+v, want updated suspended cache", svc.lastUsers)
+	}
+	if svc.lastUserHash != "hash-from-panel" {
+		t.Fatalf("lastUserHash = %q, want panel hash", svc.lastUserHash)
+	}
+}
+
+func TestApplyUserDeltaCachesUsersWhenTrafficLimitSuspended(t *testing.T) {
+	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	manager := trafficlimit.New("", func() time.Time { return now })
+	if action, err := manager.Configure(trafficlimit.Config{
+		Enabled:     true,
+		Limit:       100,
+		CurrentUsed: 100,
+		ResetDay:    1,
+		ResetTime:   "00:00",
+		Timezone:    "UTC",
+	}); err != nil || action != trafficlimit.ActionSuspend {
+		t.Fatalf("Configure() action = %v error = %v, want suspend without error", action, err)
+	}
+
+	l := limiter.New()
+	fakeKernel := &fakeDebugKernel{}
+	svc := &Service{
+		kernel:       fakeKernel,
+		trafficLimit: manager,
+		limiter:      l,
+		speedTracker: limiter.NewSpeedTracker(l),
+		lastConfig:   &model.NodeSpec{Protocol: "shadowsocks", ServerPort: 12345},
+		lastUsers:    []model.UserSpec{{ID: 1, UUID: "one"}},
+	}
+
+	svc.applyUserDelta(context.Background(), "add", []model.UserSpec{{ID: 2, UUID: "two"}})
+	if fakeKernel.startCalls != 0 || fakeKernel.addCalls != 0 {
+		t.Fatalf("kernel add calls while suspended: start=%d add=%d, want 0", fakeKernel.startCalls, fakeKernel.addCalls)
+	}
+	if len(svc.lastUsers) != 2 {
+		t.Fatalf("lastUsers after add = %+v, want 2 users", svc.lastUsers)
+	}
+
+	svc.applyUserDelta(context.Background(), "remove", []model.UserSpec{{ID: 1}})
+	if fakeKernel.removeCalls != 0 {
+		t.Fatalf("kernel remove calls while suspended = %d, want 0", fakeKernel.removeCalls)
+	}
+	if len(svc.lastUsers) != 1 || svc.lastUsers[0].ID != 2 {
+		t.Fatalf("lastUsers after remove = %+v, want only user 2", svc.lastUsers)
 	}
 }

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **[traffic-limit]**: 新增节点级月流量限额强执行；mi-node 可解析 Xboard 下发的 `traffic_limit`，基于 tracker 双向增量累计周期用量，超额后停止内核并阻止自动重启，重置时间到达或面板手动重置后恢复运行，同时把状态持久化到 `traffic-limit-state.json` 并通过 metrics 回传。 — by yinjianm
+  - 方案: `E:/code/php/Xboard-new/.helloagents/archive/2026-04/202604281921_node-traffic-limit-enforcement/`
+  - 决策: node-traffic-limit-enforcement#D001(由 mi-node 本地强制节点下线), node-traffic-limit-enforcement#D002(复用 Xboard `transfer_enable` 作为节点月额度)
+
 ### 快速修改
 
 - **[install/migrate/xbctl]**: 修复旧 `Xboard-Node` 迁移与新版单服务部署不兼容：`install.sh` 改由 `xbctl config init` 合并/替换 `instances:` 与 `credentials.env`，`migrate-to-mi-node.sh` 改以 `mi-node.service` 验收并过滤新版 RootConfig 候选，避免 `--all` 多节点迁移覆盖前一个节点。 — by yinjianm

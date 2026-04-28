@@ -143,6 +143,9 @@ type NodeConfig struct {
 
 	// Proxy Protocol (supports both top-level and networkSettings for compatibility)
 	AcceptProxyProtocol bool `json:"accept_proxy_protocol,omitempty"`
+
+	// TrafficLimit controls node-level monthly traffic enforcement.
+	TrafficLimit *TrafficLimitConfig `json:"traffic_limit,omitempty"`
 }
 
 // GetProxyProtocol returns true if AcceptProxyProtocol is set either at node level
@@ -220,6 +223,19 @@ type OutboundConfig struct {
 type BaseConfig struct {
 	PushInterval int `json:"push_interval"`
 	PullInterval int `json:"pull_interval"`
+}
+
+type TrafficLimitConfig struct {
+	Enabled     bool   `json:"enabled"`
+	Limit       int64  `json:"limit"`
+	ResetDay    int    `json:"reset_day"`
+	ResetTime   string `json:"reset_time"`
+	Timezone    string `json:"timezone"`
+	CurrentUsed int64  `json:"current_used"`
+	LastResetAt int64  `json:"last_reset_at"`
+	NextResetAt int64  `json:"next_reset_at"`
+	SuspendedAt int64  `json:"suspended_at"`
+	Status      string `json:"status"`
 }
 
 type RouteRule struct {

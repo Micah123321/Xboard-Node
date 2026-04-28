@@ -45,6 +45,22 @@ func NodeSpecFromPanel(nc *panel.NodeConfig) *NodeSpec {
 		}
 	}
 
+	var trafficLimit *TrafficLimitSpec
+	if nc.TrafficLimit != nil {
+		trafficLimit = &TrafficLimitSpec{
+			Enabled:     nc.TrafficLimit.Enabled,
+			Limit:       nc.TrafficLimit.Limit,
+			ResetDay:    nc.TrafficLimit.ResetDay,
+			ResetTime:   nc.TrafficLimit.ResetTime,
+			Timezone:    nc.TrafficLimit.Timezone,
+			CurrentUsed: nc.TrafficLimit.CurrentUsed,
+			LastResetAt: nc.TrafficLimit.LastResetAt,
+			NextResetAt: nc.TrafficLimit.NextResetAt,
+			SuspendedAt: nc.TrafficLimit.SuspendedAt,
+			Status:      nc.TrafficLimit.Status,
+		}
+	}
+
 	routes := make([]RouteRule, 0, len(nc.Routes))
 	for _, route := range nc.Routes {
 		routes = append(routes, RouteRule{
@@ -122,6 +138,7 @@ func NodeSpecFromPanel(nc *panel.NodeConfig) *NodeSpec {
 		TrafficPattern:      nc.TrafficPattern,
 		Multiplex:           multiplex,
 		AcceptProxyProtocol: nc.AcceptProxyProtocol,
+		TrafficLimit:        trafficLimit,
 	}
 }
 
@@ -181,6 +198,22 @@ func (n *NodeSpec) ToPanel() *panel.NodeConfig {
 				UpMbps:   n.Multiplex.Brutal.UpMbps,
 				DownMbps: n.Multiplex.Brutal.DownMbps,
 			}
+		}
+	}
+
+	var trafficLimit *panel.TrafficLimitConfig
+	if n.TrafficLimit != nil {
+		trafficLimit = &panel.TrafficLimitConfig{
+			Enabled:     n.TrafficLimit.Enabled,
+			Limit:       n.TrafficLimit.Limit,
+			ResetDay:    n.TrafficLimit.ResetDay,
+			ResetTime:   n.TrafficLimit.ResetTime,
+			Timezone:    n.TrafficLimit.Timezone,
+			CurrentUsed: n.TrafficLimit.CurrentUsed,
+			LastResetAt: n.TrafficLimit.LastResetAt,
+			NextResetAt: n.TrafficLimit.NextResetAt,
+			SuspendedAt: n.TrafficLimit.SuspendedAt,
+			Status:      n.TrafficLimit.Status,
 		}
 	}
 
@@ -261,6 +294,7 @@ func (n *NodeSpec) ToPanel() *panel.NodeConfig {
 		TrafficPattern:      n.TrafficPattern,
 		Multiplex:           multiplex,
 		AcceptProxyProtocol: n.AcceptProxyProtocol,
+		TrafficLimit:        trafficLimit,
 	}
 }
 

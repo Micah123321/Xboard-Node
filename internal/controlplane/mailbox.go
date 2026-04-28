@@ -197,6 +197,10 @@ func cloneNodeSpec(spec *model.NodeSpec) *model.NodeSpec {
 		}
 		clone.Multiplex = &muxCopy
 	}
+	if spec.TrafficLimit != nil {
+		trafficLimitCopy := *spec.TrafficLimit
+		clone.TrafficLimit = &trafficLimitCopy
+	}
 	return &clone
 }
 

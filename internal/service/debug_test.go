@@ -13,12 +13,16 @@ import (
 )
 
 type fakeDebugKernel struct {
-	name       string
-	running    bool
-	defaultTag string
-	probeDelay time.Duration
-	probeErr   error
-	probeCalls int
+	name        string
+	running     bool
+	defaultTag  string
+	probeDelay  time.Duration
+	probeErr    error
+	probeCalls  int
+	startCalls  int
+	updateCalls int
+	addCalls    int
+	removeCalls int
 }
 
 func (f *fakeDebugKernel) Name() string { return f.name }
@@ -27,19 +31,32 @@ func (f *fakeDebugKernel) Protocols() []string { return nil }
 
 func (f *fakeDebugKernel) Capabilities() kernel.Capabilities { return kernel.Capabilities{} }
 
-func (f *fakeDebugKernel) Start(*model.NodeSpec, []model.UserSpec, kernel.TLSCert) error { return nil }
+func (f *fakeDebugKernel) Start(*model.NodeSpec, []model.UserSpec, kernel.TLSCert) error {
+	f.startCalls++
+	f.running = true
+	return nil
+}
 
-func (f *fakeDebugKernel) Stop() {}
+func (f *fakeDebugKernel) Stop() { f.running = false }
 
 func (f *fakeDebugKernel) IsRunning() bool { return f.running }
 
 func (f *fakeDebugKernel) Reload(*model.NodeSpec, []model.UserSpec, kernel.TLSCert) error { return nil }
 
-func (f *fakeDebugKernel) AddUsers([]model.UserSpec) (int, error) { return 0, nil }
+func (f *fakeDebugKernel) AddUsers(users []model.UserSpec) (int, error) {
+	f.addCalls++
+	return len(users), nil
+}
 
-func (f *fakeDebugKernel) RemoveUsers([]model.UserSpec) (int, error) { return 0, nil }
+func (f *fakeDebugKernel) RemoveUsers(users []model.UserSpec) (int, error) {
+	f.removeCalls++
+	return len(users), nil
+}
 
-func (f *fakeDebugKernel) UpdateUsers([]model.UserSpec) (int, int, error) { return 0, 0, nil }
+func (f *fakeDebugKernel) UpdateUsers(users []model.UserSpec) (int, int, error) {
+	f.updateCalls++
+	return len(users), 0, nil
+}
 
 func (f *fakeDebugKernel) GetUserTraffic(context.Context) (map[int][2]int64, map[int]map[string]bool, int, error) {
 	return nil, nil, 0, nil

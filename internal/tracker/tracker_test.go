@@ -41,6 +41,26 @@ func TestProcess_DeltaCalculation(t *testing.T) {
 	}
 }
 
+func TestProcessReturnsCycleDeltas(t *testing.T) {
+	tr := New()
+
+	uploadDelta, downloadDelta := tr.Process(map[int][2]int64{
+		1: {100, 200},
+		2: {50, 80},
+	}, nil, 2)
+	if uploadDelta != 150 || downloadDelta != 280 {
+		t.Fatalf("first deltas = %d/%d, want 150/280", uploadDelta, downloadDelta)
+	}
+
+	uploadDelta, downloadDelta = tr.Process(map[int][2]int64{
+		1: {130, 260},
+		2: {50, 100},
+	}, nil, 2)
+	if uploadDelta != 30 || downloadDelta != 80 {
+		t.Fatalf("second deltas = %d/%d, want 30/80", uploadDelta, downloadDelta)
+	}
+}
+
 func TestProcess_CounterReset(t *testing.T) {
 	tr := New()
 

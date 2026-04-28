@@ -81,7 +81,7 @@ func (t *Tracker) Process(
 	cumTraffic map[int][2]int64,
 	kernelAliveIPs map[int]map[string]bool,
 	connCount int,
-) {
+) (uploadDelta int64, downloadDelta int64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -128,6 +128,8 @@ func (t *Tracker) Process(
 		inSpeed:   cycleIn,
 		outSpeed:  cycleOut,
 	})
+
+	return cycleOut, cycleIn
 }
 
 // FlushTraffic returns accumulated per-user traffic and resets the pending buffer.
