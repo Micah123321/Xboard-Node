@@ -116,3 +116,41 @@ func TestManagerPanelResetResumes(t *testing.T) {
 		t.Fatalf("CanRun() = false, want true")
 	}
 }
+
+func TestManagerLimitIncreaseResumesSuspendedNode(t *testing.T) {
+	now := time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC)
+	manager := New("", func() time.Time { return now })
+
+	if action, err := manager.Configure(Config{Enabled: true, Limit: 100, CurrentUsed: 120, ResetDay: 1, ResetTime: "00:00", Timezone: "UTC"}); err != nil || action != ActionSuspend {
+		t.Fatalf("Configure(initial) action = %v error = %v, want suspend without error", action, err)
+	}
+	if manager.CanRun() {
+		t.Fatalf("CanRun() = true, want false before limit increase")
+	}
+
+	action, err := manager.Configure(Config{
+		Enabled:     true,
+		Limit:       500,
+		CurrentUsed: 120,
+		ResetDay:    1,
+		ResetTime:   "00:00",
+		Timezone:    "UTC",
+	})
+	if err != nil {
+		t.Fatalf("Configure(increase) error = %v", err)
+	}
+	if action != ActionResume {
+		t.Fatalf("Configure(increase) action = %v, want ActionResume", action)
+	}
+	if !manager.CanRun() {
+		t.Fatalf("CanRun() = false, want true after limit increase")
+	}
+
+	snapshot := manager.Snapshot()
+	if snapshot.Suspended {
+		t.Fatalf("Snapshot().Suspended = true, want false")
+	}
+	if snapshot.Status != StatusNormal {
+		t.Fatalf("Snapshot().Status = %q, want %q", snapshot.Status, StatusNormal)
+	}
+}

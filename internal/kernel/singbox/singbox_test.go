@@ -36,8 +36,6 @@ func TestSingBoxCapabilities(t *testing.T) {
 	}
 }
 
-
-
 type testConn struct {
 	closed bool
 	reads  [][]byte
@@ -60,11 +58,11 @@ func (c *testConn) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func (c *testConn) Close() error { c.closed = true; return nil }
-func (c *testConn) LocalAddr() net.Addr { return &net.TCPAddr{} }
-func (c *testConn) RemoteAddr() net.Addr { return &net.TCPAddr{} }
-func (c *testConn) SetDeadline(time.Time) error { return nil }
-func (c *testConn) SetReadDeadline(time.Time) error { return nil }
+func (c *testConn) Close() error                     { c.closed = true; return nil }
+func (c *testConn) LocalAddr() net.Addr              { return &net.TCPAddr{} }
+func (c *testConn) RemoteAddr() net.Addr             { return &net.TCPAddr{} }
+func (c *testConn) SetDeadline(time.Time) error      { return nil }
+func (c *testConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *testConn) SetWriteDeadline(time.Time) error { return nil }
 
 func testInboundContext(uuid, ip string) adapter.InboundContext {
@@ -113,6 +111,30 @@ func TestConnTrackerRoutedConnectionTracksTrafficAndAliveIPs(t *testing.T) {
 	}
 	if connCount != 0 {
 		t.Fatalf("connCount after close = %d, want 0", connCount)
+	}
+}
+
+func TestTrackedPacketConnUnwrapCountersUseUserTrafficDirections(t *testing.T) {
+	us := &userStats{ips: make(map[string]int)}
+	conn := &trackedPacketConn{us: us}
+
+	_, readCounters := conn.UnwrapPacketReader()
+	if len(readCounters) != 1 {
+		t.Fatalf("read counters len = %d, want 1", len(readCounters))
+	}
+	readCounters[0](5)
+
+	_, writeCounters := conn.UnwrapPacketWriter()
+	if len(writeCounters) != 1 {
+		t.Fatalf("write counters len = %d, want 1", len(writeCounters))
+	}
+	writeCounters[0](3)
+
+	if got := us.upload.Load(); got != 5 {
+		t.Fatalf("upload = %d, want 5", got)
+	}
+	if got := us.download.Load(); got != 3 {
+		t.Fatalf("download = %d, want 3", got)
 	}
 }
 
