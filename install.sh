@@ -853,6 +853,8 @@ perform_install() {
     log_info "凭据: ${CREDENTIALS_FILE}"
     log_info "二进制: ${BINARY_PATH}"
     [ "${HAVE_XBCTL}" -eq 1 ] && log_info "管理工具: ${CLI_PATH}"
+    log_info "查看日志: journalctl -u ${SERVICE_NAME} -n 100 -f"
+    log_info "快速重启: systemctl restart ${SERVICE_NAME}"
 }
 
 perform_status() {

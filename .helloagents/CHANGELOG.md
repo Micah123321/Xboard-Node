@@ -10,6 +10,10 @@
 
 ### 快速修改
 
+- **[install]**: `install.sh` 安装完成输出新增日志查看与快速重启命令，便于部署后直接排查或重启 `mi-node.service`。 — by yinjianm
+  - 类型: 快速修改（无方案包）
+  - 文件: install.sh:850-857
+
 - **[kernel/singbox]**: 修复 `sing-box` PacketConn 快速计数路径中 UDP 上传/下载方向反置的问题；`UnwrapPacketReader` 现在计入用户上传，`UnwrapPacketWriter` 计入用户下载，并补充方向回归测试。 — by yinjianm
   - 类型: 快速修改（无方案包）
   - 文件: internal/kernel/singbox/conntracker.go:800, internal/kernel/singbox/singbox_test.go:117
