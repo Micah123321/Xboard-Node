@@ -14,6 +14,10 @@
 
 ### 快速修改
 
+- **[install]**: 修复 Alpine/OpenRC 安装时 OpenRC init 脚本在临时目录使用 `${TMP_DIR}/mi-node` 覆盖已下载二进制的问题；`/usr/local/bin/mi-node` 不再被替换成服务脚本，避免启动时报 `unrecognized option: c`。 — by yinjianm
+  - 类型: 快速修改（无方案包）
+  - 文件: install.sh:38,876-1003
+
 - **[install]**: `install.sh` 安装完成输出新增日志查看与快速重启命令，便于部署后直接排查或重启 `mi-node.service`。 — by yinjianm
   - 类型: 快速修改（无方案包）
   - 文件: install.sh:850-857

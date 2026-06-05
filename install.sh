@@ -35,6 +35,7 @@ SYSTEMD_SERVICE_NAME="mi-node.service"
 SYSTEMD_SERVICE_PATH="/etc/systemd/system/${SYSTEMD_SERVICE_NAME}"
 OPENRC_SERVICE_NAME="mi-node"
 OPENRC_SERVICE_PATH="/etc/init.d/${OPENRC_SERVICE_NAME}"
+OPENRC_STAGED_SERVICE_NAME="${OPENRC_SERVICE_NAME}.openrc"
 SERVICE_NAME="${SYSTEMD_SERVICE_NAME}"
 SERVICE_PATH="${SYSTEMD_SERVICE_PATH}"
 INIT_SYSTEM=""
@@ -872,7 +873,7 @@ EOF
 }
 
 render_openrc_service() {
-    cat > "${TMP_DIR}/${OPENRC_SERVICE_NAME}" <<EOF
+    cat > "${TMP_DIR}/${OPENRC_STAGED_SERVICE_NAME}" <<EOF
 #!/sbin/openrc-run
 
 name="mi-node"
@@ -999,7 +1000,7 @@ install_staged_files() {
     if [ "${INIT_SYSTEM}" = "systemd" ]; then
         install -m 644 "${TMP_DIR}/${SYSTEMD_SERVICE_NAME}" "${SYSTEMD_SERVICE_PATH}"
     else
-        install -m 755 "${TMP_DIR}/${OPENRC_SERVICE_NAME}" "${OPENRC_SERVICE_PATH}"
+        install -m 755 "${TMP_DIR}/${OPENRC_STAGED_SERVICE_NAME}" "${OPENRC_SERVICE_PATH}"
     fi
     if [ "${HAVE_XBCTL}" -eq 1 ]; then
         install -m 755 "${TMP_DIR}/xbctl" "${CLI_PATH}"
