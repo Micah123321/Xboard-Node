@@ -11,6 +11,7 @@
 - `instances:` 可为每个实例定义独立 panel、kernel、runtime、cert、health/debug 端口；machine mode 使用 `machine.machine_id` + `machine.token_env`
 - 默认配置根路径统一为 `/etc/mi-node`，配置文件为 `/etc/mi-node/config.yml`，凭据文件为 `/etc/mi-node/credentials.env`
 - `install.sh` 通过 `xbctl config init` 生成部署配置；重复安装或迁移多节点时按实例 ID 合并/替换 `instances:`，并合并 `credentials.env`
+- 原生安装器支持 systemd 与 Alpine/OpenRC：systemd 写入 `/etc/systemd/system/mi-node.service`，OpenRC 写入 `/etc/init.d/mi-node`；`xbctl service/status/egress/upgrade/uninstall` 会按当前 init system 选择 `systemctl` 或 `rc-service`/`rc-update`
 - 已部署节点的默认落地通过 `xbctl egress list/set/clear` 管理；`install.sh egress ...` 是远程一键入口，内部只透传给 `xbctl egress`
 - `kernel.egress.socks5` 与 `kernel.egress.shadowsocks` 互斥
 - `kernel.egress.shadowsocks` 支持传统 Shadowsocks 与 `2022-blake3-*`

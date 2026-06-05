@@ -29,9 +29,9 @@ Mi Node 的专用节点后端，完整兼容 Mi API，支持 sing-box 与 Xray �
 
 - Linux 服务器
 - 已安装 `bash`
-- 使用 systemd
+- 使用 systemd 或 OpenRC
 - 建议以 `root` 或 `sudo` 执行
-- 支持 Ubuntu 20+、Debian 11+、CentOS/Rocky/AlmaLinux 8+ 等 systemd 发行版
+- 支持 Ubuntu 20+、Debian 11+、CentOS/Rocky/AlmaLinux 8+ 等 systemd 发行版，以及 Alpine Linux/OpenRC 环境
 
 ### 一键部署单节点
 
@@ -171,7 +171,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Micah123321/mi-node/refs/hea
 - `install.sh` 现在使用单个 `--egress-shadowsocks-uri 'ss://...'` 参数写入默认 SS 出站
 - `kernel.egress.shadowsocks` 现在只接受 `uri`；旧的 `address / port / method / password` 写法会在加载配置时直接报错
 - `aes-192-gcm` 仅建议在 `singbox` 内核下使用；`xray` 下请使用 `aes-128-gcm`、`aes-256-gcm` 或 `chacha20-ietf-poly1305`
-- 当你使用 `singbox + --egress-shadowsocks-uri` 时，服务运行日志会记录默认出站真实 probe 结果；可通过 `journalctl -u mi-node -f` 或调试端口排查
+- 当你使用 `singbox + --egress-shadowsocks-uri` 时，服务运行日志会记录默认出站真实 probe 结果；systemd 可通过 `journalctl -u mi-node -f` 排查，OpenRC 可查看 `/var/log/mi-node.log` 和 `/var/log/mi-node.err`，也可以使用调试端口排查
 - 如果未配置 SOCKS5，默认出站仍然是直连，但默认拦截规则依然会照常生效
 - 传入默认出站参数时，安装脚本会写出 `kernel.egress.enable_default_rules: true` 和 `kernel.egress.prefer_ipv4: true`；未写出时这两个开关仍按代码默认值 `true` 生效
 
@@ -215,9 +215,15 @@ ssh root@YOUR_HOST "bash <(curl -fsSL https://raw.githubusercontent.com/Micah123
 原生部署完成后可使用：
 
 ```bash
+# systemd
 systemctl status mi-node
 journalctl -u mi-node -f
 systemctl restart mi-node
+
+# OpenRC / Alpine
+rc-service mi-node status
+tail -n 100 -f /var/log/mi-node.log /var/log/mi-node.err
+rc-service mi-node restart
 ```
 
 ## 本地 SS 出站调试端口

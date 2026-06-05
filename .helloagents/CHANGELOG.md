@@ -4,6 +4,10 @@
 
 ### 新增
 
+- **[install/xbctl]**: 原生安装器新增 Alpine/OpenRC 兼容；`install.sh` 会按 init system 渲染 systemd unit 或 OpenRC init 脚本，`xbctl service/status/egress/upgrade/uninstall` 会自动选择 `systemctl` 或 `rc-service`/`rc-update`，避免 Alpine 环境因缺少 systemd 直接失败。 — by yinjianm
+  - 方案: [202606052356_alpine-openrc-installer](archive/2026-06/202606052356_alpine-openrc-installer/)
+  - 决策: alpine-openrc-installer#D001(使用 init system 抽象覆盖完整服务生命周期)
+
 - **[traffic-limit]**: 新增节点级月流量限额强执行；mi-node 可解析 Xboard 下发的 `traffic_limit`，基于 tracker 双向增量累计周期用量，超额后停止内核并阻止自动重启，重置时间到达或面板手动重置后恢复运行，同时把状态持久化到 `traffic-limit-state.json` 并通过 metrics 回传。 — by yinjianm
   - 方案: `E:/code/php/Xboard-new/.helloagents/archive/2026-04/202604281921_node-traffic-limit-enforcement/`
   - 决策: node-traffic-limit-enforcement#D001(由 mi-node 本地强制节点下线), node-traffic-limit-enforcement#D002(复用 Xboard `transfer_enable` 作为节点月额度)

@@ -2,6 +2,7 @@
 
 | 时间戳 | 名称 | 类型 | 涉及模块 | 决策 | 结果 |
 |--------|------|------|----------|------|------|
+| 202606052356 | alpine-openrc-installer | - | - | - | ✅完成 |
 | 202604281350 | egress-management | - | - | - | ✅完成 |
 | 202604280026 | fix-merge-deployment-consistency | - | - | - | ✅完成 |
 | 202604161713 | repo-folder-rename-to-mi-node | - | - | - | ✅完成 |

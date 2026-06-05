@@ -27,8 +27,10 @@ const (
 	defaultCredentialsPath = "/etc/mi-node/credentials.env"
 	defaultBinaryPath      = "/usr/local/bin/mi-node"
 	defaultCLIPath         = "/usr/local/bin/xbctl"
-	serviceName            = "mi-node.service"
-	serviceFilePath        = "/etc/systemd/system/mi-node.service"
+	systemdServiceName     = "mi-node.service"
+	systemdServiceFilePath = "/etc/systemd/system/mi-node.service"
+	openRCServiceName      = "mi-node"
+	openRCServiceFilePath  = "/etc/init.d/mi-node"
 	defaultInstallRoot     = "/etc/mi-node"
 	downloadBase           = "https://github.com/micah123321/mi-node/releases"
 )
@@ -130,6 +132,14 @@ type installMeta struct {
 	Instances        []instanceSummary `json:"instances"`
 	UpdatedAt        string            `json:"updated_at"`
 }
+
+type initSystem string
+
+const (
+	initSystemSystemd initSystem = "systemd"
+	initSystemOpenRC  initSystem = "openrc"
+	initSystemUnknown initSystem = "unknown"
+)
 
 func loadInstallMeta(path string) (*installMeta, error) {
 	data, err := os.ReadFile(path)
@@ -243,7 +253,7 @@ func runStatus() error {
 	fmt.Printf("  version:  %s\n", ver)
 
 	// Service status
-	svc := systemctlState()
+	svc := serviceState()
 	fmt.Printf("  service:  %s\n", svc)
 
 	// Health
@@ -304,14 +314,11 @@ func runService(args []string) error {
 	rest := args[1:]
 	switch sub {
 	case "status":
-		return runCommand("sudo", append([]string{"systemctl", "status", serviceName, "--no-pager"}, rest...)...)
+		return runServiceCommand("status", rest...)
 	case "start", "stop", "restart", "enable", "disable":
-		return runCommand("sudo", append([]string{"systemctl", sub, serviceName}, rest...)...)
+		return runServiceCommand(sub, rest...)
 	case "logs":
-		if len(rest) == 0 {
-			rest = []string{"-f"}
-		}
-		return runCommand("sudo", append([]string{"journalctl", "-u", serviceName}, rest...)...)
+		return runServiceLogs(rest)
 	default:
 		return fmt.Errorf("unknown service command: %s", sub)
 	}
@@ -381,7 +388,7 @@ func runBindAdd(mode string, args []string) error {
 	}
 	// Restart service to pick up new config
 	fmt.Println("Restarting service...")
-	if err := runCommand("systemctl", "restart", serviceName); err != nil {
+	if err := runServiceCommand("restart"); err != nil {
 		return fmt.Errorf("service restart failed: %w", err)
 	}
 	fmt.Println("Binding added successfully")
@@ -475,8 +482,10 @@ func runUpgrade(args []string) error {
 
 	// Restart service
 	fmt.Println("Restarting service...")
-	runCommand("systemctl", "daemon-reload")
-	if err := runCommand("systemctl", "restart", serviceName); err != nil {
+	if detectInitSystem() == initSystemSystemd {
+		runCommand("systemctl", "daemon-reload")
+	}
+	if err := runServiceCommand("restart"); err != nil {
 		fmt.Println("Restart failed, rolling back...")
 		rollbackOK := true
 		if fileExists(backupBinary) {
@@ -491,8 +500,10 @@ func runUpgrade(args []string) error {
 				rollbackOK = false
 			}
 		}
-		runCommand("systemctl", "daemon-reload")
-		if e := runCommand("systemctl", "restart", serviceName); e != nil {
+		if detectInitSystem() == initSystemSystemd {
+			runCommand("systemctl", "daemon-reload")
+		}
+		if e := runServiceCommand("restart"); e != nil {
 			return fmt.Errorf("upgrade and rollback restart both failed: %w", e)
 		}
 		if rollbackOK {
@@ -548,17 +559,20 @@ func runUninstall(args []string) error {
 	var warnings []string
 
 	// Stop and disable service
-	if fileExists(serviceFilePath) {
-		if err := runCommand("systemctl", "stop", serviceName); err != nil {
+	svcPath := serviceFilePath()
+	if fileExists(svcPath) {
+		if err := runServiceCommand("stop"); err != nil {
 			warnings = append(warnings, fmt.Sprintf("stop service: %v", err))
 		}
-		if err := runCommand("systemctl", "disable", serviceName); err != nil {
+		if err := runServiceCommand("disable"); err != nil {
 			warnings = append(warnings, fmt.Sprintf("disable service: %v", err))
 		}
-		if err := os.Remove(serviceFilePath); err != nil {
+		if err := os.Remove(svcPath); err != nil {
 			warnings = append(warnings, fmt.Sprintf("remove service file: %v", err))
 		}
-		runCommand("systemctl", "daemon-reload")
+		if detectInitSystem() == initSystemSystemd {
+			runCommand("systemctl", "daemon-reload")
+		}
 	}
 
 	// Remove binaries
@@ -789,7 +803,7 @@ func removeBinding(panelURL string, nodeID int, machineID int, instanceID string
 		if err := writeInstallMeta(defaultMetaPath, root); err != nil {
 			return err
 		}
-		runCommand("systemctl", "stop", serviceName)
+		runServiceCommand("stop")
 		fmt.Printf("removed %d binding(s)\n", len(removed))
 		fmt.Println("All bindings removed. Service stopped.")
 		fmt.Println("Use 'xbctl bind add-node/add-machine' to add a new binding, or 'xbctl uninstall' to fully uninstall.")
@@ -807,7 +821,7 @@ func removeBinding(panelURL string, nodeID int, machineID int, instanceID string
 	if err := writeInstallMeta(defaultMetaPath, root); err != nil {
 		return err
 	}
-	if err := runCommand("systemctl", "restart", serviceName); err != nil {
+	if err := runServiceCommand("restart"); err != nil {
 		return err
 	}
 	fmt.Printf("removed %d binding(s)\n", len(removed))
@@ -1030,7 +1044,7 @@ func collectRowsFromMeta() ([]instanceRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	serviceStatus := systemctlState()
+	serviceStatus := serviceState()
 	healthStatus := healthStatus()
 	rows := make([]instanceRow, 0, len(meta.Instances))
 	for _, inst := range meta.Instances {
@@ -1056,7 +1070,7 @@ func collectRowsFromConfig() ([]instanceRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	serviceStatus := systemctlState()
+	serviceStatus := serviceState()
 	healthStatus := healthStatus()
 	rows := make([]instanceRow, 0, len(instances))
 	for _, inst := range instances {
@@ -1092,19 +1106,6 @@ func printRows(rows []instanceRow, output string) error {
 	tw.Flush()
 	_, err := fmt.Print(buf.String())
 	return err
-}
-
-func systemctlState() string {
-	cmd := exec.Command("systemctl", "is-active", serviceName)
-	out, err := cmd.CombinedOutput()
-	state := strings.TrimSpace(string(out))
-	if state != "" {
-		return state
-	}
-	if err != nil {
-		return "unknown"
-	}
-	return state
 }
 
 func healthStatus() string {
@@ -1178,31 +1179,6 @@ func latestInstanceID(instances []*config.Config) string {
 		return id
 	}
 	return ""
-}
-
-func regenerateServiceFile() error {
-	unit := fmt.Sprintf(`[Unit]
-Description=Mi Node Backend
-Documentation=https://github.com/micah123321/mi-node
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=%s
-EnvironmentFile=-%s
-ExecStart=%s -c %s
-Restart=always
-RestartSec=5
-LimitNOFILE=1048576
-NoNewPrivileges=true
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-`, defaultInstallRoot, defaultCredentialsPath, defaultBinaryPath, defaultConfigPath)
-	return os.WriteFile(serviceFilePath, []byte(unit), 0o644)
 }
 
 func machineIDPtr(cfg *config.Config) *int {

@@ -81,7 +81,7 @@ func runEgressSet(args []string) error {
 		return err
 	}
 	if !opts.NoRestart {
-		if err := runCommand("systemctl", "restart", serviceName); err != nil {
+		if err := runServiceCommand("restart"); err != nil {
 			return err
 		}
 	}
@@ -107,7 +107,7 @@ func runEgressClear(args []string) error {
 		return err
 	}
 	if !target.NoRestart {
-		if err := runCommand("systemctl", "restart", serviceName); err != nil {
+		if err := runServiceCommand("restart"); err != nil {
 			return err
 		}
 	}

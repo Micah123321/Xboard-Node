@@ -4,7 +4,7 @@ set -euo pipefail
 # mi-node native installer.
 #
 # Supported actions:
-#   install   Configure /etc/mi-node/config.yml and start mi-node.service
+#   install   Configure /etc/mi-node/config.yml and start the mi-node service
 #   status    Show service, binary, config and health status
 #   upgrade   Replace mi-node/xbctl binaries and restart the service when active
 #   egress    Manage default upstream egress for an existing instance
@@ -31,8 +31,13 @@ BACKUP_DIR="${MI_NODE_BACKUP_DIR:-${INSTALL_ROOT}/backups}"
 BINARY_PATH="${MI_NODE_BINARY_PATH:-${INSTALL_DIR}/mi-node}"
 CLI_PATH="${MI_NODE_XBCTL_PATH:-${INSTALL_DIR}/xbctl}"
 INSTALLER_COPY_PATH="${MI_NODE_INSTALLER_COPY_PATH:-${INSTALL_ROOT}/install.sh}"
-SERVICE_NAME="mi-node.service"
-SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}"
+SYSTEMD_SERVICE_NAME="mi-node.service"
+SYSTEMD_SERVICE_PATH="/etc/systemd/system/${SYSTEMD_SERVICE_NAME}"
+OPENRC_SERVICE_NAME="mi-node"
+OPENRC_SERVICE_PATH="/etc/init.d/${OPENRC_SERVICE_NAME}"
+SERVICE_NAME="${SYSTEMD_SERVICE_NAME}"
+SERVICE_PATH="${SYSTEMD_SERVICE_PATH}"
+INIT_SYSTEM=""
 
 ACTION="install"
 MODE="node"
@@ -333,7 +338,7 @@ parse_args() {
                 shift 2
                 ;;
             --docker)
-                log_error "当前安装器只管理原生 mi-node.service。Docker 部署请使用 ghcr.io/micah123321/mi-node 镜像。"
+                log_error "当前安装器只管理原生 mi-node 服务。Docker 部署请使用 ghcr.io/micah123321/mi-node 镜像。"
                 exit 1
                 ;;
             *)
@@ -511,15 +516,168 @@ check_root() {
     fi
 }
 
-ensure_systemd() {
-    if ! command -v systemctl >/dev/null 2>&1; then
-        log_error "原生安装需要 systemd/systemctl"
-        exit 1
+detect_init_system() {
+    if [ -n "${INIT_SYSTEM}" ]; then
+        return
     fi
-    if [ ! -d /run/systemd/system ]; then
-        log_error "当前系统看起来未运行 systemd"
-        exit 1
+    if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+        INIT_SYSTEM="systemd"
+        SERVICE_NAME="${SYSTEMD_SERVICE_NAME}"
+        SERVICE_PATH="${SYSTEMD_SERVICE_PATH}"
+        return
     fi
+    if command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then
+        INIT_SYSTEM="openrc"
+        SERVICE_NAME="${OPENRC_SERVICE_NAME}"
+        SERVICE_PATH="${OPENRC_SERVICE_PATH}"
+        return
+    fi
+    INIT_SYSTEM="unknown"
+}
+
+ensure_supported_init() {
+    detect_init_system
+    case "${INIT_SYSTEM}" in
+        systemd|openrc)
+            return
+            ;;
+        *)
+            log_error "原生安装需要 systemd/systemctl 或 OpenRC(rc-service/rc-update) 支持"
+            exit 1
+            ;;
+    esac
+}
+
+service_is_active() {
+    detect_init_system
+    case "${INIT_SYSTEM}" in
+        systemd)
+            systemctl is-active --quiet "${SYSTEMD_SERVICE_NAME}" 2>/dev/null
+            ;;
+        openrc)
+            rc-service "${OPENRC_SERVICE_NAME}" status >/dev/null 2>&1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+service_state() {
+    detect_init_system
+    case "${INIT_SYSTEM}" in
+        systemd)
+            systemctl is-active "${SYSTEMD_SERVICE_NAME}" 2>/dev/null || true
+            ;;
+        openrc)
+            if rc-service "${OPENRC_SERVICE_NAME}" status >/dev/null 2>&1; then
+                printf 'running\n'
+            else
+                printf 'stopped\n'
+            fi
+            ;;
+        *)
+            printf 'init unavailable\n'
+            ;;
+    esac
+}
+
+service_stop() {
+    detect_init_system
+    case "${INIT_SYSTEM}" in
+        systemd)
+            systemctl stop "${SYSTEMD_SERVICE_NAME}"
+            ;;
+        openrc)
+            rc-service "${OPENRC_SERVICE_NAME}" stop
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+service_restart() {
+    detect_init_system
+    case "${INIT_SYSTEM}" in
+        systemd)
+            systemctl restart "${SYSTEMD_SERVICE_NAME}"
+            ;;
+        openrc)
+            rc-service "${OPENRC_SERVICE_NAME}" restart
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+service_enable_now() {
+    detect_init_system
+    case "${INIT_SYSTEM}" in
+        systemd)
+            systemctl enable --now "${SYSTEMD_SERVICE_NAME}"
+            ;;
+        openrc)
+            rc-update add "${OPENRC_SERVICE_NAME}" default
+            rc-service "${OPENRC_SERVICE_NAME}" start
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+service_disable() {
+    detect_init_system
+    case "${INIT_SYSTEM}" in
+        systemd)
+            systemctl disable "${SYSTEMD_SERVICE_NAME}"
+            ;;
+        openrc)
+            rc-update del "${OPENRC_SERVICE_NAME}" default
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+service_reload_manager() {
+    detect_init_system
+    if [ "${INIT_SYSTEM}" = "systemd" ]; then
+        systemctl daemon-reload
+    fi
+}
+
+service_logs_hint() {
+    detect_init_system
+    case "${INIT_SYSTEM}" in
+        systemd)
+            printf 'journalctl -u %s -n 100 -f' "${SYSTEMD_SERVICE_NAME}"
+            ;;
+        openrc)
+            printf 'tail -n 100 -f /var/log/%s.log /var/log/%s.err' "${OPENRC_SERVICE_NAME}" "${OPENRC_SERVICE_NAME}"
+            ;;
+        *)
+            printf '查看服务管理器日志'
+            ;;
+    esac
+}
+
+service_restart_hint() {
+    detect_init_system
+    case "${INIT_SYSTEM}" in
+        systemd)
+            printf 'systemctl restart %s' "${SYSTEMD_SERVICE_NAME}"
+            ;;
+        openrc)
+            printf 'rc-service %s restart' "${OPENRC_SERVICE_NAME}"
+            ;;
+        *)
+            printf '重启 mi-node 服务'
+            ;;
+    esac
 }
 
 detect_arch() {
@@ -713,13 +871,59 @@ WantedBy=multi-user.target
 EOF
 }
 
+render_openrc_service() {
+    cat > "${TMP_DIR}/${OPENRC_SERVICE_NAME}" <<EOF
+#!/sbin/openrc-run
+
+name="mi-node"
+description="Mi Node Backend"
+supervisor=supervise-daemon
+command="${BINARY_PATH}"
+command_args="-c ${CONFIG_FILE}"
+command_user="root:root"
+directory="${INSTALL_ROOT}"
+pidfile="/run/mi-node.pid"
+output_log="/var/log/mi-node.log"
+error_log="/var/log/mi-node.err"
+respawn_delay=5
+respawn_max=0
+
+depend() {
+    need net
+    after firewall
+}
+
+start_pre() {
+    checkpath --directory --mode 0755 "${INSTALL_ROOT}"
+    checkpath --file --mode 0644 "\${output_log}"
+    checkpath --file --mode 0644 "\${error_log}"
+}
+
+export_envs() {
+    if [ -f "${CREDENTIALS_FILE}" ]; then
+        while IFS='=' read -r key value; do
+            case "\${key}" in
+                ""|\#*) continue ;;
+            esac
+            export "\${key}=\${value}"
+        done < "${CREDENTIALS_FILE}"
+    fi
+}
+
+start() {
+    export_envs
+    default_start
+}
+EOF
+}
+
 detect_current_state() {
     CURRENT_STATE="fresh"
     SERVICE_WAS_ACTIVE=0
-    if [ -f "${CONFIG_FILE}" ] || [ -f "${SERVICE_PATH}" ] || [ -x "${BINARY_PATH}" ]; then
+    if [ -f "${CONFIG_FILE}" ] || [ -f "${SYSTEMD_SERVICE_PATH}" ] || [ -f "${OPENRC_SERVICE_PATH}" ] || [ -x "${BINARY_PATH}" ]; then
         CURRENT_STATE="existing"
     fi
-    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
+    if service_is_active; then
         SERVICE_WAS_ACTIVE=1
     fi
 }
@@ -747,7 +951,8 @@ backup_existing_state() {
     [ -f "${CONFIG_FILE}" ] && cp -a "${CONFIG_FILE}" "${backup_path}/config.yml"
     [ -f "${CREDENTIALS_FILE}" ] && cp -a "${CREDENTIALS_FILE}" "${backup_path}/credentials.env"
     [ -f "${INSTALL_META}" ] && cp -a "${INSTALL_META}" "${backup_path}/install-meta.json"
-    [ -f "${SERVICE_PATH}" ] && cp -a "${SERVICE_PATH}" "${backup_path}/${SERVICE_NAME}"
+    [ -f "${SYSTEMD_SERVICE_PATH}" ] && cp -a "${SYSTEMD_SERVICE_PATH}" "${backup_path}/${SYSTEMD_SERVICE_NAME}"
+    [ -f "${OPENRC_SERVICE_PATH}" ] && cp -a "${OPENRC_SERVICE_PATH}" "${backup_path}/${OPENRC_SERVICE_NAME}.openrc"
     [ -f "/etc/systemd/system/mi-node@.service" ] && cp -a "/etc/systemd/system/mi-node@.service" "${backup_path}/mi-node@.service"
     [ -x "${BINARY_PATH}" ] && cp -a "${BINARY_PATH}" "${backup_path}/mi-node"
     [ -x "${CLI_PATH}" ] && cp -a "${CLI_PATH}" "${backup_path}/xbctl"
@@ -781,15 +986,21 @@ stop_legacy_template_services() {
 }
 
 install_staged_files() {
-    stop_legacy_template_services
-    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
-        systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    if [ "${INIT_SYSTEM}" = "systemd" ]; then
+        stop_legacy_template_services
+    fi
+    if service_is_active; then
+        service_stop >/dev/null 2>&1 || true
     fi
     install -m 755 "${TMP_DIR}/mi-node" "${BINARY_PATH}"
     install -m 600 "${TMP_DIR}/config.yml" "${CONFIG_FILE}"
     install -m 600 "${TMP_DIR}/credentials.env" "${CREDENTIALS_FILE}"
     install -m 600 "${TMP_DIR}/install-meta.json" "${INSTALL_META}"
-    install -m 644 "${TMP_DIR}/${SERVICE_NAME}" "${SERVICE_PATH}"
+    if [ "${INIT_SYSTEM}" = "systemd" ]; then
+        install -m 644 "${TMP_DIR}/${SYSTEMD_SERVICE_NAME}" "${SYSTEMD_SERVICE_PATH}"
+    else
+        install -m 755 "${TMP_DIR}/${OPENRC_SERVICE_NAME}" "${OPENRC_SERVICE_PATH}"
+    fi
     if [ "${HAVE_XBCTL}" -eq 1 ]; then
         install -m 755 "${TMP_DIR}/xbctl" "${CLI_PATH}"
         ln -sf "${CLI_PATH}" /usr/bin/xbctl 2>/dev/null || true
@@ -797,7 +1008,7 @@ install_staged_files() {
     if [ -f "$0" ]; then
         install -m 755 "$0" "${INSTALLER_COPY_PATH}" 2>/dev/null || true
     fi
-    systemctl daemon-reload
+    service_reload_manager
 }
 
 wait_for_health() {
@@ -826,14 +1037,14 @@ start_service() {
         log_warn "已按 --skip-start 跳过服务启动"
         return
     fi
-    systemctl enable --now "${SERVICE_NAME}"
+    service_enable_now
     wait_for_health || true
 }
 
 perform_install() {
     validate_install_request
     check_root
-    ensure_systemd
+    ensure_supported_init
     detect_arch
     detect_os
     detect_current_state
@@ -843,7 +1054,11 @@ perform_install() {
     stage_binary
     stage_xbctl
     render_config
-    render_service
+    if [ "${INIT_SYSTEM}" = "systemd" ]; then
+        render_service
+    else
+        render_openrc_service
+    fi
     backup_existing_state
     install_staged_files
     start_service
@@ -853,23 +1068,18 @@ perform_install() {
     log_info "凭据: ${CREDENTIALS_FILE}"
     log_info "二进制: ${BINARY_PATH}"
     [ "${HAVE_XBCTL}" -eq 1 ] && log_info "管理工具: ${CLI_PATH}"
-    log_info "查看日志: journalctl -u ${SERVICE_NAME} -n 100 -f"
-    log_info "快速重启: systemctl restart ${SERVICE_NAME}"
+    log_info "服务管理: ${INIT_SYSTEM}"
+    log_info "查看日志: $(service_logs_hint)"
+    log_info "快速重启: $(service_restart_hint)"
 }
 
 perform_status() {
+    detect_init_system
     echo "mi-node status"
     echo ""
     echo "  service: ${SERVICE_NAME}"
-    if command -v systemctl >/dev/null 2>&1; then
-        if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
-            echo "  state:   running"
-        else
-            echo "  state:   $(systemctl is-active "${SERVICE_NAME}" 2>/dev/null || true)"
-        fi
-    else
-        echo "  state:   systemctl unavailable"
-    fi
+    echo "  init:    ${INIT_SYSTEM}"
+    echo "  state:   $(service_state)"
     echo "  binary:  ${BINARY_PATH} $([ -x "${BINARY_PATH}" ] && echo '(present)' || echo '(missing)')"
     echo "  config:  ${CONFIG_FILE} $([ -f "${CONFIG_FILE}" ] && echo '(present)' || echo '(missing)')"
     echo "  creds:   ${CREDENTIALS_FILE} $([ -f "${CREDENTIALS_FILE}" ] && echo '(present)' || echo '(missing)')"
@@ -882,7 +1092,7 @@ perform_status() {
 
 perform_upgrade() {
     check_root
-    ensure_systemd
+    ensure_supported_init
     detect_arch
     detect_current_state
     TMP_DIR="$(mktemp -d)"
@@ -896,7 +1106,7 @@ perform_upgrade() {
         ln -sf "${CLI_PATH}" /usr/bin/xbctl 2>/dev/null || true
     fi
     if [ "${SERVICE_WAS_ACTIVE}" -eq 1 ]; then
-        systemctl restart "${SERVICE_NAME}"
+        service_restart
         log_info "服务已重启: ${SERVICE_NAME}"
     else
         log_info "服务当前未运行，已仅更新二进制"
@@ -905,6 +1115,7 @@ perform_upgrade() {
 
 perform_uninstall() {
     check_root
+    detect_init_system
     if [ "${YES}" -ne 1 ]; then
         echo ""
         log_warn "将停止并移除 ${SERVICE_NAME}、${BINARY_PATH} 和 ${CLI_PATH}。配置默认保留。"
@@ -914,12 +1125,16 @@ perform_uninstall() {
             exit 0
         fi
     fi
-    if command -v systemctl >/dev/null 2>&1; then
+    if [ "${INIT_SYSTEM}" = "systemd" ]; then
         stop_legacy_template_services
-        systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
-        systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
-        rm -f "${SERVICE_PATH}"
+        systemctl stop "${SYSTEMD_SERVICE_NAME}" 2>/dev/null || true
+        systemctl disable "${SYSTEMD_SERVICE_NAME}" 2>/dev/null || true
+        rm -f "${SYSTEMD_SERVICE_PATH}"
         systemctl daemon-reload 2>/dev/null || true
+    elif [ "${INIT_SYSTEM}" = "openrc" ]; then
+        rc-service "${OPENRC_SERVICE_NAME}" stop 2>/dev/null || true
+        rc-update del "${OPENRC_SERVICE_NAME}" default 2>/dev/null || true
+        rm -f "${OPENRC_SERVICE_PATH}"
     fi
     rm -f "${BINARY_PATH}" "${CLI_PATH}" /usr/bin/xbctl
     if [ "${PURGE}" -eq 1 ]; then
@@ -955,7 +1170,7 @@ perform_egress() {
         exit 1
     fi
     check_root
-    ensure_systemd
+    ensure_supported_init
     detect_arch
     detect_current_state
     ensure_dirs
