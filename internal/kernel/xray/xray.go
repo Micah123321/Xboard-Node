@@ -642,17 +642,81 @@ func hexEncode(dst, src []byte) {
 	}
 }
 
-// ensureGeoData downloads geo databases when routes reference geoip/geosite.
+// ensureGeoData downloads geo databases used by generated Xray routing rules.
 func (x *Xray) ensureGeoData(nc *model.NodeSpec) {
-	needIP, needSite := kernel.NeedsGeoIP(nc.Routes), kernel.NeedsGeoSite(nc.Routes)
+	dir := resolveGeoDataDir(x.cfg)
+	if dir != "" {
+		os.Setenv("XRAY_LOCATION_ASSET", dir)
+	}
+
+	needIP, needSite := xrayGeoDataRequirements(x.cfg, nc)
 	if !needIP && !needSite {
 		return
 	}
-	dir := x.cfg.GeoDataDir
+	if dir == "" {
+		nlog.Core().Warn("geo database directory is empty")
+		return
+	}
 	if err := geodata.Ensure(dir, needIP, needSite, "xray"); err != nil {
 		nlog.Core().Warn("geo database unavailable", "error", err)
 	}
-	os.Setenv("XRAY_LOCATION_ASSET", dir)
+}
+
+func resolveGeoDataDir(kcfg config.KernelConfig) string {
+	if dir := strings.TrimSpace(kcfg.GeoDataDir); dir != "" {
+		return dir
+	}
+	return strings.TrimSpace(kcfg.ConfigDir)
+}
+
+func xrayGeoDataRequirements(kcfg config.KernelConfig, nc *model.NodeSpec) (bool, bool) {
+	needIP := rawRoutesNeedGeoPrefix(kcfg.CustomRoute, "geoip:")
+	needSite := rawRoutesNeedGeoPrefix(kcfg.CustomRoute, "geosite:")
+	if nc == nil {
+		return needIP, needSite
+	}
+	if kernel.NeedsGeoIP(nc.Routes) || kernel.NeedsGeoIPRules(nc.CustomRouteRules) || rawRoutesNeedGeoPrefix(nc.CustomRoutes, "geoip:") {
+		needIP = true
+	}
+	if kernel.NeedsGeoSite(nc.Routes) || kernel.NeedsGeoSiteRules(nc.CustomRouteRules) || rawRoutesNeedGeoPrefix(nc.CustomRoutes, "geosite:") {
+		needSite = true
+	}
+	return needIP, needSite
+}
+
+func rawRoutesNeedGeoPrefix(rules []map[string]any, prefix string) bool {
+	for _, rule := range rules {
+		if valueHasGeoPrefix(rule, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func valueHasGeoPrefix(value any, prefix string) bool {
+	switch v := value.(type) {
+	case string:
+		return strings.HasPrefix(strings.TrimSpace(v), prefix)
+	case []string:
+		for _, item := range v {
+			if valueHasGeoPrefix(item, prefix) {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range v {
+			if valueHasGeoPrefix(item, prefix) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, item := range v {
+			if valueHasGeoPrefix(item, prefix) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // marshalConfig builds the xray JSON config and returns the raw bytes.

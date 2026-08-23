@@ -162,7 +162,6 @@ func TestXraySetSpeedLimitFuncUsesPatchedCorePath(t *testing.T) {
 	}
 }
 
-
 func TestXrayCapabilities(t *testing.T) {
 	x := New(config.KernelConfig{Type: "xray"})
 	caps := x.Capabilities()
@@ -174,6 +173,42 @@ func TestXrayCapabilities(t *testing.T) {
 	}
 }
 
+func TestXrayGeoDataRequirementsIgnoresDefaultProtection(t *testing.T) {
+	needIP, needSite := xrayGeoDataRequirements(config.KernelConfig{}, &model.NodeSpec{})
+	if needIP || needSite {
+		t.Fatalf("expected built-in protection rules to avoid geodata, got geoip=%v geosite=%v", needIP, needSite)
+	}
+}
+
+func TestXrayGeoDataRequirementsIncludesGeneratedRoutes(t *testing.T) {
+	disabled := false
+	node := &model.NodeSpec{
+		Routes: []model.RouteRule{{Match: []string{"geosite:google"}}},
+		CustomRouteRules: []model.CustomRouteRule{{
+			Match: model.RouteMatch{IPCIDRs: []string{"geoip:cn"}},
+		}},
+		CustomRoutes: []map[string]any{{
+			"domain": []any{"geosite:netflix"},
+		}},
+	}
+	needIP, needSite := xrayGeoDataRequirements(config.KernelConfig{Egress: config.EgressConfig{EnableDefaultRules: &disabled}}, node)
+	if !needIP || !needSite {
+		t.Fatalf("expected generated routes to require both geodata files, got geoip=%v geosite=%v", needIP, needSite)
+	}
+}
+
+func TestXrayGeoDataRequirementsIncludesLocalCustomRoutes(t *testing.T) {
+	kcfg := config.KernelConfig{
+		CustomRoute: []map[string]any{
+			{"ip": []any{"geoip:private"}},
+			{"domain": []string{"geosite:category-ads-all"}},
+		},
+	}
+	needIP, needSite := xrayGeoDataRequirements(kcfg, nil)
+	if !needIP || !needSite {
+		t.Fatalf("expected local custom routes to require both geodata files, got geoip=%v geosite=%v", needIP, needSite)
+	}
+}
 
 func TestXrayUpdateBandwidthLimitsWritesPatchedCoreFeature(t *testing.T) {
 	inst := new(xrayCore.Instance)
@@ -189,7 +224,6 @@ func TestXrayUpdateBandwidthLimitsWritesPatchedCoreFeature(t *testing.T) {
 		t.Fatal("expected patched bandwidth feature to receive user limiter")
 	}
 }
-
 
 func TestXrayUpdateBandwidthLimitsUsesSpeedLimitFunc(t *testing.T) {
 	inst := new(xrayCore.Instance)
@@ -213,7 +247,6 @@ func TestXrayUpdateBandwidthLimitsUsesSpeedLimitFunc(t *testing.T) {
 	}
 }
 
-
 func TestXrayUpdateBandwidthLimitsFallsBackToUserSpeed(t *testing.T) {
 	inst := new(xrayCore.Instance)
 	bm := featurebandwidth.New()
@@ -228,7 +261,6 @@ func TestXrayUpdateBandwidthLimitsFallsBackToUserSpeed(t *testing.T) {
 		t.Fatal("expected fallback limiter derived from user speed")
 	}
 }
-
 
 func TestXrayUpdateUsersLimitOnlyRefreshesDispatcherAndBandwidth(t *testing.T) {
 	x := New(config.KernelConfig{Type: "xray"})

@@ -456,8 +456,13 @@ func TestBuildRouting_Default(t *testing.T) {
 		t.Errorf("expected block outbound, got %v", rules[0]["outboundTag"])
 	}
 	ips := rules[0]["ip"].([]string)
-	if len(ips) != 1 || ips[0] != "geoip:private" {
-		t.Errorf("expected geoip:private block rule, got %v", ips)
+	if len(ips) == 0 || ips[0] != "10.0.0.0/8" {
+		t.Errorf("expected built-in private CIDR block rule, got %v", ips)
+	}
+	for _, ip := range ips {
+		if ip == "geoip:private" {
+			t.Fatalf("default private block rule must not require geoip.dat: %v", ips)
+		}
 	}
 	if rules[3]["outboundTag"] != "direct" {
 		t.Errorf("expected final direct rule, got %v", rules[3]["outboundTag"])
